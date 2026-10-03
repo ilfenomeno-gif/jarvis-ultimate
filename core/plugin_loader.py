@@ -13,6 +13,7 @@ import inspect
 import re
 import sys
 import traceback
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -33,6 +34,8 @@ class PluginRecord:
     file: str = ""
     valid: bool = False
     error: str = ""
+    start: Optional[Callable] = None
+    stop: Optional[Callable] = None
 
 
 class PluginRegistry:
@@ -40,6 +43,49 @@ class PluginRegistry:
         self._plugins = plugins          # name -> PluginRecord, VALID entries only
         self._all_records: list[PluginRecord] = []   # valid + invalid, for UI listing
         self._logger = logger
+
+    # GEV lifecycle hook
+    def start_all(self) -> None:
+        """Start plugin lifecycle hooks in discovery order."""
+        for name, rec in self._plugins.items():
+            if not callable(rec.start):
+                continue
+            try:
+                rec.start()
+            except Exception as exc:
+                self._logger(f"Plugin '{name}' failed during start(): {exc}")
+
+    # GEV lifecycle hook
+    def stop_all(self, timeout: float = 5.0) -> None:
+        """Stop plugin lifecycle hooks in reverse order within a time limit."""
+        hooks = [
+            (name, rec.stop)
+            for name, rec in reversed(self._plugins.items())
+            if callable(rec.stop)
+        ]
+        if not hooks:
+            return
+
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="plugin-stop")
+        futures = [(name, executor.submit(stop)) for name, stop in hooks]
+        try:
+            done, _ = wait(
+                [future for _, future in futures],
+                timeout=max(0.0, timeout),
+            )
+            for name, future in futures:
+                if future not in done:
+                    future.cancel()
+                    self._logger(
+                        f"Plugin '{name}' stop timed out after {timeout:.1f} seconds."
+                    )
+                    continue
+                try:
+                    future.result()
+                except Exception as exc:
+                    self._logger(f"Plugin '{name}' failed during stop(): {exc}")
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     # -- called by main.py at LiveConnectConfig build time --
     def get_tool_declarations(self) -> list[dict]:
@@ -126,8 +172,13 @@ def _validate(module, filename: str) -> PluginRecord:
         return PluginRecord(name=name, file=filename,
                              error="Missing callable run(parameters, ...) function.")
 
+    start_fn = getattr(module, "start", None)
+    stop_fn = getattr(module, "stop", None)
+
     return PluginRecord(name=name, description=description.strip(), parameters=parameters,
-                         run=run_fn, file=filename, valid=True, error="")
+                         run=run_fn, file=filename, valid=True, error="",
+                         start=start_fn if callable(start_fn) else None,
+                         stop=stop_fn if callable(stop_fn) else None)
 
 
 def discover_plugins(plugins_dir: Path, core_tool_names: set[str],
