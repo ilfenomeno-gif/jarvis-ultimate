@@ -30,6 +30,8 @@ INSTALL_TIMEOUT_SEC = 600
 STOP_TIMEOUT_SEC = 5
 GEV_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "gev.log"
 _MAX_SAFE_JS_INTEGER = 2**53 - 1
+_HISTORICAL_RESPONSE_TIMEOUT_SEC = 20
+_historical_request_lock = threading.Lock()
 
 _process: subprocess.Popen[str] | None = None
 _process_lock = threading.Lock()
@@ -51,6 +53,8 @@ PLUGIN = {
         "Azioni disponibili: open (apri il globo), track (target_type e target_id), "
         "layer (layer ed enabled), reset (ripristina la vista), annotate (lat, lon e text), "
         "historical_map (mostra o anima confini storici disponibili). "
+        "historical_scenario, historical_factions, historical_events e "
+        "historical_years per gli strumenti storici GEV. "
         "Per ricerche, rotte e altri strumenti usa le funzioni MCP gev_mcp_*."
     ),
     "parameters": {
@@ -58,8 +62,17 @@ PLUGIN = {
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "Azione GEV prevista: open, track, layer, reset, annotate oppure historical_map.",
-                "enum": ["open", "track", "layer", "reset", "annotate", "historical_map"],
+                "description": (
+                    "Azione GEV: open, track, layer, reset, annotate, camera "
+                    "incrementale (zoom, tilt, rotate, reset_camera) e comandi "
+                    "historical_*. Per 'vai a X' usa show_in_gods_eye_view."
+                ),
+                "enum": [
+                    "open", "track", "layer", "reset", "annotate", "historical_map",
+                    "historical_scenario", "historical_factions",
+                    "historical_events", "historical_years", "zoom", "tilt",
+                    "rotate", "reset_camera",
+                ],
             },
             "target_type": {
                 "type": "STRING",
@@ -80,11 +93,28 @@ PLUGIN = {
             },
             "lat": {
                 "type": "NUMBER",
-                "description": "Per annotate: latitudine del punto.",
+                "description": "Latitudine da -90 a 90; per annotate.",
             },
             "lon": {
                 "type": "NUMBER",
-                "description": "Per annotate: longitudine del punto.",
+                "description": "Longitudine da -180 a 180; per annotate.",
+            },
+            "altitude_m": {
+                "type": "NUMBER",
+                "description": "Altitudine camera in metri (50..20000000).",
+            },
+            "heading_deg": {
+                "type": "NUMBER",
+                "description": "Rotazione orizzontale della camera (0..360).",
+            },
+            "pitch_deg": {
+                "type": "NUMBER",
+                "description": "Inclinazione della camera (-90..0).",
+            },
+            "level": {
+                "type": "STRING",
+                "description": "Per zoom: in dimezza l'altitudine, out la raddoppia.",
+                "enum": ["in", "out"],
             },
             "text": {
                 "type": "STRING",
@@ -97,7 +127,13 @@ PLUGIN = {
             },
             "year": {
                 "type": "INTEGER",
-                "description": "Per historical_map show: anno richiesto; verrà scelto lo snapshot disponibile più vicino.",
+                "description": (
+                    "Anno richiesto per historical_map show e historical_scenario "
+                    "(in historical_scenario è facoltativo), storico per "
+                    "historical_factions (obbligatorio) o filtro per "
+                    "historical_events (facoltativo). Per gli anni non presenti "
+                    "viene selezionato lo snapshot disponibile più vicino."
+                ),
             },
             "start_year": {
                 "type": "INTEGER",
@@ -110,6 +146,14 @@ PLUGIN = {
             "speed": {
                 "type": "NUMBER",
                 "description": "Per animate: secondi per snapshot (da 0.5 a 30).",
+            },
+            "name": {
+                "type": "STRING",
+                "description": "Per historical_scenario: identificativo (ww2, cold_war o ww1).",
+            },
+            "scenario": {
+                "type": "STRING",
+                "description": "Scenario per historical_factions e historical_events.",
             },
         },
         "required": ["action"],
@@ -526,6 +570,55 @@ def run_extra_tool(tool_name: str, parameters: dict, player=None) -> str:
     return tool_result_text(mcp_tool_name, result)
 
 
+def _run_historical_request(
+    player, request_type: str, response_type: str, params: dict
+) -> tuple[dict | list | None, str | None]:
+    send_to_gev = getattr(player, "send_to_gev", None)
+    on_gev_message = getattr(player, "on_gev_message", None)
+    if not callable(send_to_gev) or not callable(on_gev_message):
+        return None, "L'interfaccia GEV non supporta le risposte ai comandi storici."
+
+    request_id = f"jarvis-historical-{time.time_ns()}"
+    response_ready = threading.Event()
+    response: dict | None = None
+
+    def receive(message: dict) -> None:
+        nonlocal response
+        if (
+            isinstance(message, dict)
+            and message.get("type") == response_type
+            and message.get("id") == request_id
+        ):
+            response = message
+            response_ready.set()
+
+    with _historical_request_lock:
+        try:
+            on_gev_message(receive)
+            send_to_gev({
+                "action": "historical_map",
+                # The UI accepts this legacy command; GEV dispatches by `type`.
+                "params": {
+                    "command": "stop",
+                    "type": request_type,
+                    "id": request_id,
+                    **params,
+                },
+            })
+        except Exception as exc:
+            return None, f"Invio comando storico non riuscito: {exc}"
+        if not response_ready.wait(_HISTORICAL_RESPONSE_TIMEOUT_SEC):
+            return None, "GEV non ha risposto entro il timeout del comando storico."
+    if response is None:
+        return None, "GEV ha restituito una risposta storica vuota."
+    if response.get("ok") is not True:
+        return None, str(response.get("error", "GEV ha rifiutato il comando storico."))
+    result = response.get("result")
+    if not isinstance(result, (dict, list)):
+        return None, "GEV ha restituito un risultato storico non valido."
+    return result, None
+
+
 def run(parameters: dict, player=None) -> str:
     """Validate an action and forward its abstract message to the UI bridge."""
     if not isinstance(parameters, dict):
@@ -547,14 +640,60 @@ def run(parameters: dict, player=None) -> str:
                 pass
         _log(message)
 
-    allowed_actions = {"open", "track", "layer", "reset", "annotate", "historical_map"}
+    allowed_actions = {
+        "open", "track", "layer", "reset", "annotate", "historical_map",
+        "historical_scenario", "historical_factions",
+        "historical_events", "historical_years", "zoom", "tilt", "rotate",
+        "reset_camera",
+    }
     if action not in allowed_actions:
         log_message(f"GEV: azione sconosciuta '{action}'")
         return f"Non riconosco l'azione GEV '{action}', signore."
 
     params: dict[str, object]
-    if action in {"open", "reset"}:
+    camera_response: str | None = None
+    if action in {"open", "reset", "historical_years"}:
         params = {}
+    elif action == "historical_scenario":
+        name = parameters.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return "Per caricare uno scenario storico mi serve il nome, signore."
+        params = {"name": name.strip()}
+        year = parameters.get("year")
+        if year is not None:
+            if (
+                not isinstance(year, int)
+                or isinstance(year, bool)
+                or abs(year) > _MAX_SAFE_JS_INTEGER
+            ):
+                return "Per selezionare l'anno dello scenario mi serve un intero valido, signore."
+            params["year"] = year
+    elif action == "historical_factions":
+        scenario = parameters.get("scenario")
+        year = parameters.get("year")
+        if not isinstance(scenario, str) or not scenario.strip():
+            return "Per applicare le fazioni mi serve lo scenario, signore."
+        if (
+            not isinstance(year, int)
+            or isinstance(year, bool)
+            or abs(year) > _MAX_SAFE_JS_INTEGER
+        ):
+            return "Per applicare le fazioni mi serve un anno intero valido, signore."
+        params = {"scenario": scenario.strip(), "year": year}
+    elif action == "historical_events":
+        scenario = parameters.get("scenario")
+        if not isinstance(scenario, str) or not scenario.strip():
+            return "Per caricare gli eventi mi serve lo scenario, signore."
+        params = {"scenario": scenario.strip()}
+        year = parameters.get("year")
+        if year is not None:
+            if (
+                not isinstance(year, int)
+                or isinstance(year, bool)
+                or abs(year) > _MAX_SAFE_JS_INTEGER
+            ):
+                return "Per filtrare gli eventi mi serve un anno intero valido, signore."
+            params["year"] = year
     elif action == "track":
         target_type = parameters.get("target_type")
         if not isinstance(target_type, str) or target_type not in {"flight", "satellite"}:
@@ -576,6 +715,51 @@ def run(parameters: dict, player=None) -> str:
         if not isinstance(enabled, bool):
             return "Per il layer mi dica se devo attivarlo o disattivarlo, signore."
         params = {"layer": layer.strip(), "enabled": enabled}
+    elif action == "zoom":
+        level = parameters.get("level")
+        if isinstance(level, str) and level in {"in", "out"}:
+            params = {"level": level}
+            camera_response = (
+                "Zoom avanti, signore." if level == "in" else "Zoom indietro, signore."
+            )
+        elif "altitude_m" in parameters:
+            altitude = parameters["altitude_m"]
+            if (
+                not isinstance(altitude, (int, float))
+                or isinstance(altitude, bool)
+                or not math.isfinite(altitude)
+                or not 50 <= altitude <= 20_000_000
+            ):
+                return "L'altitudine camera deve essere compresa tra 50 e 20000000 metri, signore."
+            params = {"altitude_m": altitude}
+            camera_response = f"Imposto altitudine a {altitude} m, signore."
+        else:
+            return "Specifica 'in', 'out' o un'altitudine, signore."
+    elif action == "tilt":
+        pitch = parameters.get("pitch_deg")
+        if (
+            not isinstance(pitch, (int, float))
+            or isinstance(pitch, bool)
+            or not math.isfinite(pitch)
+            or not -90 <= pitch <= 0
+        ):
+            return "L'inclinazione deve essere compresa tra -90 e 0 gradi, signore."
+        params = {"pitch_deg": pitch}
+        camera_response = f"Inclino la vista a {pitch}°, signore."
+    elif action == "rotate":
+        heading = parameters.get("heading_deg")
+        if (
+            not isinstance(heading, (int, float))
+            or isinstance(heading, bool)
+            or not math.isfinite(heading)
+            or not 0 <= heading <= 360
+        ):
+            return "La rotazione deve essere compresa tra 0 e 360 gradi, signore."
+        params = {"heading_deg": heading}
+        camera_response = f"Ruoto la vista a {heading}°, signore."
+    elif action == "reset_camera":
+        params = {}
+        camera_response = "Torno alla vista globale, signore."
     elif action == "historical_map":
         command = parameters.get("command")
         if command == "show":
@@ -628,7 +812,6 @@ def run(parameters: dict, player=None) -> str:
             return "Per annotare mi serve il testo dell'annotazione, signore."
         params = {"lat": lat, "lon": lon, "text": text.strip()}
 
-    message = {"action": action, "params": params}
     send_to_gev = getattr(player, "send_to_gev", None) if player is not None else None
     if not callable(send_to_gev):
         log_message(f"GEV: UI non pronta, azione '{action}' non inviata")
@@ -637,6 +820,73 @@ def run(parameters: dict, player=None) -> str:
             "l'interfaccia non è ancora pronta."
         )
 
+    historical_actions = {
+        "historical_scenario": {
+            "request_type": "gev:historical-scenario",
+            "response_type": "gev:historical-scenario-applied",
+        },
+        "historical_factions": {
+            "request_type": "gev:historical-factions",
+            "response_type": "gev:historical-factions-applied",
+        },
+        "historical_events": {
+            "request_type": "gev:historical-events",
+            "response_type": "gev:historical-events-applied",
+        },
+        "historical_years": {
+            "request_type": "gev:historical-years",
+            "response_type": "gev:historical-years-applied",
+        },
+    }
+    if action in historical_actions:
+        historical_action = historical_actions[action]
+        result, error = _run_historical_request(
+            player,
+            historical_action["request_type"],
+            historical_action["response_type"],
+            params,
+        )
+        if error:
+            log_message(f"GEV: comando '{action}' non riuscito: {error}")
+            return f"Signore, il comando storico '{action}' non è riuscito: {error}"
+        if action == "historical_years":
+            if not isinstance(result, list) or any(
+                not isinstance(year, int)
+                or isinstance(year, bool)
+                or abs(year) > _MAX_SAFE_JS_INTEGER
+                for year in result
+            ):
+                return "GEV ha restituito una lista degli anni non valida, signore."
+            return "Anni storici disponibili: " + ", ".join(map(str, result))
+        assert isinstance(result, dict)
+        if action == "historical_scenario":
+            map_result = result.get("map")
+            snapshot_year = (
+                map_result.get("year")
+                if isinstance(map_result, dict)
+                else result.get("year", "non disponibile")
+            )
+            return (
+                f"Scenario storico '{params['name']}' caricato: "
+                f"snapshot {snapshot_year}, signore."
+            )
+        if action == "historical_factions":
+            return (
+                f"Fazioni di '{params['scenario']}' applicate per "
+                f"{result.get('selectedFactionYear', params['year'])}, signore."
+            )
+        return (
+            f"Eventi storici di '{params['scenario']}' caricati: "
+            f"{result.get('count', 0)}, signore."
+        )
+
+    camera_actions = {
+        "zoom": "camera_zoom",
+        "tilt": "camera_tilt",
+        "rotate": "camera_rotate",
+        "reset_camera": "camera_reset",
+    }
+    message = {"action": camera_actions.get(action, action), "params": params}
     try:
         send_to_gev(message)
     except Exception as exc:
@@ -652,8 +902,12 @@ def run(parameters: dict, player=None) -> str:
         details = f" (lat={params['lat']}, lon={params['lon']})"
     elif action == "historical_map":
         details = f" (command={params['command']})"
+    elif action in camera_actions:
+        details = f" (bridge={message['action']}, params={params})"
     log_message(f"GEV: invio azione '{action}'{details}")
 
+    if camera_response is not None:
+        return camera_response
     if action == "open":
         return "Apro God's Eye View, signore."
     if action == "track":

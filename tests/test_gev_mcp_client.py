@@ -342,6 +342,196 @@ def test_historical_map_action_rejects_invalid_year_and_speed():
         {"action": "historical_map", "command": "show", "year": "1938"},
         player=Player(),
     )
+
+
+def test_gev_year_schema_documents_historical_action_years():
+    description = gev_plugin.PLUGIN["parameters"]["properties"]["year"]["description"]
+
+    assert "historical_scenario" in description
+    assert "historical_factions" in description
+    assert "historical_events" in description
+
+
+def test_camera_actions_are_advertised_in_plugin_schema():
+    properties = gev_plugin.PLUGIN["parameters"]["properties"]
+    assert {
+        "zoom", "tilt", "rotate", "reset_camera",
+    }.issubset(properties["action"]["enum"])
+    assert "fly_to" not in properties["action"]["enum"]
+    assert properties["level"]["enum"] == ["in", "out"]
+    assert {
+        "lat", "lon", "altitude_m", "heading_deg", "pitch_deg",
+    }.issubset(properties)
+
+
+@pytest.mark.parametrize(
+    ("parameters", "expected_response", "expected_params"),
+    [
+        (
+            {"action": "zoom", "level": "in"},
+            "Zoom avanti, signore.",
+            {"level": "in"},
+        ),
+        (
+            {"action": "zoom", "level": "out"},
+            "Zoom indietro, signore.",
+            {"level": "out"},
+        ),
+        (
+            {"action": "tilt", "pitch_deg": -45},
+            "Inclino la vista a -45°, signore.",
+            {"pitch_deg": -45},
+        ),
+        (
+            {"action": "rotate", "heading_deg": 180},
+            "Ruoto la vista a 180°, signore.",
+            {"heading_deg": 180},
+        ),
+        (
+            {"action": "reset_camera"},
+            "Torno alla vista globale, signore.",
+            {},
+        ),
+    ],
+)
+def test_camera_actions_forward_to_ui_bridge(
+    parameters, expected_response, expected_params
+):
+    sent = []
+    bridge_actions = {
+        "zoom": "camera_zoom",
+        "tilt": "camera_tilt",
+        "rotate": "camera_rotate",
+        "reset_camera": "camera_reset",
+    }
+
+    class Player:
+        def send_to_gev(self, message):
+            sent.append(message)
+
+    assert gev_plugin.run(parameters, player=Player()) == expected_response
+    assert sent == [{
+        "action": bridge_actions[parameters["action"]],
+        "params": expected_params,
+    }]
+
+
+@pytest.mark.parametrize(
+    ("parameters", "request_type", "response_type", "result", "expected"),
+    [
+        (
+            {"action": "historical_scenario", "name": "ww2", "year": 1941},
+            "gev:historical-scenario",
+            "gev:historical-scenario-applied",
+            {"year": 1941, "map": {"year": 1938}},
+            "snapshot 1938",
+        ),
+        (
+            {"action": "historical_factions", "scenario": "ww2", "year": 1943},
+            "gev:historical-factions",
+            "gev:historical-factions-applied",
+            {"selectedFactionYear": 1943},
+            "applicate per 1943",
+        ),
+        (
+            {"action": "historical_events", "scenario": "ww2", "year": 1944},
+            "gev:historical-events",
+            "gev:historical-events-applied",
+            {"count": 2},
+            "caricati: 2",
+        ),
+        (
+            {"action": "historical_years"},
+            "gev:historical-years",
+            "gev:historical-years-applied",
+            [-123000, 1938, 1945],
+            "-123000, 1938, 1945",
+        ),
+    ],
+)
+def test_historical_extended_actions_round_trip_through_embedded_bridge(
+    parameters, request_type, response_type, result, expected
+):
+    class Player:
+        callback = None
+
+        def on_gev_message(self, callback):
+            self.callback = callback
+
+        def send_to_gev(self, message):
+            request = message["params"]
+            assert message["action"] == "historical_map"
+            assert request["command"] == "stop"
+            assert request["command"] in {"show", "animate", "stop", "clear"}
+            assert request["type"] == request_type
+            self.callback({
+                "type": response_type,
+                "id": request["id"],
+                "ok": True,
+                "result": result,
+            })
+
+    response = gev_plugin.run(parameters, player=Player())
+    assert expected in response
+
+
+def test_historical_extended_action_propagates_geV_errors():
+    class Player:
+        def on_gev_message(self, callback):
+            self.callback = callback
+
+        def send_to_gev(self, message):
+            request = message["params"]
+            assert request["command"] == "stop"
+            assert request["command"] in {"show", "animate", "stop", "clear"}
+            assert request["type"] == "gev:historical-scenario"
+            self.callback({
+                "type": "gev:historical-scenario-applied",
+                "id": request["id"],
+                "ok": False,
+                "error": "Unknown historical scenario",
+            })
+
+    response = gev_plugin.run(
+        {"action": "historical_scenario", "name": "missing"},
+        player=Player(),
+    )
+    assert "Unknown historical scenario" in response
+
+
+def test_historical_extended_action_reports_missing_bridge_response(monkeypatch):
+    monkeypatch.setattr(gev_plugin, "_HISTORICAL_RESPONSE_TIMEOUT_SEC", 0.001)
+
+    class Player:
+        def on_gev_message(self, _callback):
+            pass
+
+        def send_to_gev(self, _message):
+            pass
+
+    response = gev_plugin.run(
+        {"action": "historical_years"},
+        player=Player(),
+    )
+    assert "timeout" in response
+
+
+def test_historical_extended_actions_validate_arguments_before_sending():
+    class Player:
+        def send_to_gev(self, _message):
+            raise AssertionError("invalid command must not be sent")
+
+    assert "nome" in gev_plugin.run(
+        {"action": "historical_scenario"}, player=Player()
+    )
+    assert "anno intero" in gev_plugin.run(
+        {
+            "action": "historical_factions",
+            "scenario": "ww2",
+            "year": True,
+        },
+        player=Player(),
+    )
     assert "velocità" in gev_plugin.run(
         {
             "action": "historical_map",

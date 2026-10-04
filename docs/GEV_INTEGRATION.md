@@ -128,7 +128,7 @@ preambolo vocale è generato da Gemini indipendentemente da questo.
 - `send_to_gev()` accoda la signal Qt e non attende `gev:view-applied`.
   La risposta ottimistica del plugin indica quindi che l'invio alla UI è
   stato accettato, non che GEV abbia completato l'azione
-  (`../ui.py:4549`, `../plugins/gev_plugin.py:641-670`). Il callback di
+  (`../ui.py:4549`, `../plugins/gev_plugin.py:682`). Il callback di
   risposta è predisposto per la gestione successiva.
 - Sul desktop Windows non era presente un collegamento J.A.R.V.I.S.
   È stato creato `C:\Users\PC\Desktop\J.A.R.V.I.S.lnk`, puntato al
@@ -149,8 +149,9 @@ preambolo vocale è generato da Gemini indipendentemente da questo.
   (`../ui.py:2732-2743`, `:2750-2754`, `:2776-2780`).
 - Il layer satelliti, il test vocale con microfono e la chiusura mediante
   Ctrl+C con verifica della porta/processi **non sono stati verificati**
-  durante questa prova. Jarvis è stato lasciato avviato dal collegamento;
-  il processo Node che serve GEV e la porta 4173 sono quindi attesi attivi.
+  durante quella prova. Il suo stato dei processi non costituisce una verifica
+  dello stato corrente; il server Vite temporaneo usato nei test browser
+  successivi è stato arrestato al termine dello smoke test.
   > Da verificare
 
 ## Passo 4c — client MCP locale
@@ -180,7 +181,7 @@ passati; chiamata live di
 `gev_mcp_get_recent_launches` conclusa restituendo una riga dati. La
 verifica vocale con Gemini Live rimane distinta da queste prove API.
 
-## Mappa storica — primo verticale
+## Mappa storica — snapshot, scenari e bridge
 
 Il plugin diretto `gev` accetta l'azione `historical_map` con `show`,
 `animate`, `stop` e `clear`. Jarvis inoltra il comando all'app incorporata
@@ -190,31 +191,90 @@ l'errore. L'overlay Cesium e il relativo lifecycle sono implementati nel
 checkout GEV in `src/app/historicalMap.js`; l'aggancio al lifecycle applicativo
 e al bridge è in `src/app/tools.js` e `src/app/embed.js`.
 
-La sorgente verificata durante l'implementazione conteneva 54 anni; tra 1930
-e 1950 risultavano solo 1930, 1938 e 1945. Perciò `show 1939` seleziona 1938,
-e il playback `1939–1945` cicla gli snapshot 1938 e 1945: non interpola gli
-anni mancanti. I colori identificano deterministicamente le entità per nome;
-la sorgente non fornisce una classificazione Asse/Alleati/Neutrali.
+L'indice remoto viene validato e, se non raggiungibile, viene usato il file
+locale `data/historical-index-fallback.json`. `listYears()` restituisce gli
+anni accettati; per un anno senza snapshot viene usato lo snapshot più vicino
+e il controller registra `requested_year` e `selected_year`. I GeoJSON remoti
+sono conservati in IndexedDB per il fallback offline; l'intero archivio non è
+incluso nel checkout (`src/app/historicalMap.js:94`, `:593`, `:674`).
 
-Test automatici: controller storico e bridge GEV sono coperti da
-`src/app/historicalMap.test.mjs` e `src/app/embed.test.mjs`; il routing e la
-validazione Jarvis sono coperti da `tests/test_gev_mcp_client.py`. L'esito
-del browser smoke GEV è positivo: `show 1939` ha caricato 1938 con 531
-entità nominate, senza errori o warning console; l'animazione discreta ha
-raggiunto 1945, e `stop`/`clear` hanno ripristinato il numero iniziale di data
-source. Il filtro dei feature senza `NAME`/`SUBJECTO` è in
-`src/app/historicalMap.js:167`; il test che verifica il filtro è in
-`src/app/historicalMap.test.mjs:118`. Il feature non nominato che aveva
-innescato l'errore Cesium era l'indice zero-based 94 del dataset live
-`geojson/world_1938.geojson`. Successivamente, nella finestra Jarvis avviata
-dal collegamento desktop, il test end-to-end testuale ha caricato lo snapshot
-1938, avviato e fermato il playback e rimosso l'overlay. Il globo Cesium
-incorporato era visibile. Il comando vocale via microfono non è stato testato.
-> Da verificare: input vocale reale e layer satelliti nella QWebEngine.
+La nuova superficie del plugin espone `historical_scenario` (parametri
+`name`, `year` facoltativo), `historical_factions` (`scenario`, `year`),
+`historical_events` (`scenario`, `year` facoltativo) e `historical_years`.
+Sono inoltrati attraverso l'azione UI già consentita `historical_map`, con il
+campo `type` impostato al corrispondente messaggio `gev:historical-*` e un ID
+di correlazione. Il plugin registra `on_gev_message`, attende la risposta
+corrispondente fino al timeout configurato e restituisce gli errori ricevuti;
+`historical_years` restituisce i numeri degli anni
+(`plugins/gev_plugin.py:545`, `:742`).
 
-Questo comando storico passa dal tool diretto `gev` e dal bridge UI; non
-aggiunge tool vocali standalone alla superficie MCP. I limiti dei tool MCP
-esistenti restano quelli descritti sopra.
+Le definizioni GEV si trovano in `data/factions.json` e `data/events.json`.
+I colori e le date sono applicati dal controller Cesium; le classificazioni
+per fazione sono configurazioni annuali curate, non proprietà verificate del
+dataset GeoJSON. L'animazione temporale sceglie gli anchor di fazione più
+vicini e non interpola geometrie tra gli snapshot. Vedere
+[`../../../gods-eye-view-main/_gev-clone/docs/historical-maps.md`](../../../gods-eye-view-main/_gev-clone/docs/historical-maps.md)
+per protocollo, limiti e scenari di verifica manuale.
 
-Per dettagli sul formato dati, sui limiti e sulla procedura manuale vedere
-[`../../../gods-eye-view-main/_gev-clone/docs/historical-maps.md`](../../../gods-eye-view-main/_gev-clone/docs/historical-maps.md).
+**Verificato nel codice e nei test automatici di questa modifica:**
+
+- GEV: parsing degli anni, incluso il filename BCE, elenco anni, selezione
+  snapshot, fallback index/cache, materiali fazione aggiornati dal clock,
+  avvio scenario, date giornaliere eventi e risposta correlata per `years`.
+- Jarvis: validazione dei quattro comandi, payload personalizzati via
+  `historical_map`, correlazione ID, timeout ed errori restituiti.
+- Comandi eseguiti:
+  `.\.node\node.exe --test src\app\historicalMap.test.mjs` nel checkout GEV;
+  `.\.venv\Scripts\python.exe -m pytest tests\test_gev_mcp_client.py -q`
+  nel checkout Jarvis.
+
+**Verificato manualmente nel browser GEV:** `historical_years` ha restituito
+54 anni; lo scenario `ww2` richiesto per il 1941 ha caricato lo snapshot 1938
+con 531 entità e ha applicato i colori; il materiale Cesium dell'entità Italia
+è passato da rosso nel 1941 a blu nel 1943; l'evento D-Day è risultato visibile
+il 6 giugno 1944 e non visibile il giorno successivo. Portando il clock al
+1942 e generando un tick Cesium, il controller ha sostituito lo snapshot 1938
+con 1945; `clear` ha ripristinato anno, moltiplicatore e stato di animazione
+precedenti.
+
+**Non verificato manualmente in questa modifica:** collegamento dei quattro
+messaggi alla finestra Jarvis QWebEngine, riconoscimento vocale e completamento
+manuale dell'intero scenario in tempo reale. Il controller imposta un anno
+simulato ogni 20 secondi. I test Python coprono il plugin e la correlazione
+dei messaggi con callback controllate, non una sessione GUI integrata. AtlasPI
+MCP non è stato installato né modificato; la relativa fase rimane opzionale e
+non implementata.
+
+> Da verificare: corrispondenza dei nomi delle entità GeoJSON con tutte le
+> voci delle fazioni e accuratezza storica delle classificazioni annuali.
+
+## Azioni camera Jarvis
+
+Il plugin `gev` gestisce le azioni camera incrementali:
+
+| Azione | Parametri | Effetto |
+|---|---|---|
+| `zoom` | `level: "in" \| "out"` oppure `altitude_m` | Dimezza/raddoppia l'altitudine corrente o imposta un'altitudine assoluta tramite `camera_zoom`. |
+| `tilt` | `pitch_deg` da -90 a 0 | Aggiorna l'inclinazione con `camera_tilt`. |
+| `rotate` | `heading_deg` da 0 a 360 | Aggiorna la rotazione orizzontale con `camera_rotate`. |
+| `reset_camera` | nessuno | Ripristina il punto di vista globale con `camera_reset`. |
+
+Il fly-to per nomi di luogo (ad esempio “vai a Roma”) è affidato
+esclusivamente al tool MCP nativo `show_in_gods_eye_view`, che risolve un'area
+e costruisce una vista. Non è un'azione del plugin `gev`; questa separazione
+evita che Gemini scelga tra due tool concorrenti per la stessa destinazione.
+
+I messaggi `camera_*` sono azioni interne del bridge Jarvis; l'UI aggiorna la
+camera conservando gli altri campi della vista e invia a GEV il messaggio
+completo `gev:view`. I campi camera e i relativi limiti sono verificati nello
+schema GEV `src/view/index.js`; `gev:view` applica la posizione assoluta tramite
+Cesium `camera.flyTo` (`src/app/embed.js`).
+
+Le azioni incrementali non implementano pan o orbit continui. Questi
+richiederebbero un'estensione futura del protocollo embed GEV.
+
+**Validazione automatica:** `tests/test_gev_mcp_client.py` copre l'inoltro
+incrementale di zoom, tilt, rotate e reset. Il fly-to è responsabilità del
+tool MCP `show_in_gods_eye_view`. I test del bridge incrementale non
+equivalgono a una verifica del rendering nella finestra QWebEngine o al
+riconoscimento vocale tramite microfono.

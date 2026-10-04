@@ -2820,7 +2820,82 @@ class MainWindow(QMainWindow):
             )
             return
 
-        if action == "layer":
+        if action.startswith("camera_"):
+            camera = self._gev_view_state.get("camera", {})
+            if not isinstance(camera, dict):
+                camera = {}
+            camera = {
+                "lat": camera.get("lat", 0),
+                "lon": camera.get("lon", 0),
+                "altitude_m": camera.get("altitude_m", 800_000),
+                "heading_deg": camera.get("heading_deg", 0),
+                "pitch_deg": camera.get("pitch_deg", -90),
+            }
+
+            if action == "camera_set":
+                for key in ("lat", "lon", "altitude_m", "heading_deg", "pitch_deg"):
+                    if key in params:
+                        camera[key] = params[key]
+            elif action == "camera_zoom":
+                altitude = camera["altitude_m"]
+                level = params.get("level")
+                if level == "in":
+                    camera["altitude_m"] = max(50, altitude / 2)
+                elif level == "out":
+                    camera["altitude_m"] = min(20_000_000, altitude * 2)
+                elif "altitude_m" in params:
+                    camera["altitude_m"] = params["altitude_m"]
+                else:
+                    self._log_sig.emit("GEV: camera_zoom richiede level o altitude_m")
+                    return
+            elif action == "camera_tilt":
+                if "pitch_deg" not in params:
+                    self._log_sig.emit("GEV: camera_tilt richiede pitch_deg")
+                    return
+                camera["pitch_deg"] = params["pitch_deg"]
+            elif action == "camera_rotate":
+                if "heading_deg" not in params:
+                    self._log_sig.emit("GEV: camera_rotate richiede heading_deg")
+                    return
+                camera["heading_deg"] = params["heading_deg"]
+            elif action == "camera_fly":
+                if "lat" not in params or "lon" not in params:
+                    self._log_sig.emit("GEV: camera_fly richiede lat e lon")
+                    return
+                camera["lat"] = params["lat"]
+                camera["lon"] = params["lon"]
+                if "altitude_m" in params:
+                    camera["altitude_m"] = params["altitude_m"]
+            elif action == "camera_reset":
+                camera = {
+                    "lat": 0,
+                    "lon": 0,
+                    "altitude_m": 800_000,
+                    "heading_deg": 0,
+                    "pitch_deg": -90,
+                }
+
+            camera_ranges = {
+                "lat": (-90, 90),
+                "lon": (-180, 180),
+                "altitude_m": (50, 20_000_000),
+                "heading_deg": (0, 360),
+                "pitch_deg": (-90, 0),
+            }
+            for key, (minimum, maximum) in camera_ranges.items():
+                value = camera[key]
+                if (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or not math.isfinite(value)
+                    or not minimum <= value <= maximum
+                ):
+                    self._log_sig.emit(f"GEV: valore camera non valido per {key}")
+                    return
+
+            self._gev_view_state["camera"] = camera
+            self._gev_view_state["follow"] = None
+        elif action == "layer":
             layer_id = _GEV_LAYERS[params["layer"]]
             layers = set(self._gev_view_state["layers"])
             if params["enabled"]:
@@ -4501,7 +4576,9 @@ class JarvisUI:
 
         action = message.get("action")
         if action not in {
-            "open", "track", "layer", "reset", "annotate", "historical_map"
+            "open", "track", "layer", "reset", "annotate", "historical_map",
+            "camera_set", "camera_fly", "camera_zoom", "camera_tilt",
+            "camera_rotate", "camera_reset",
         }:
             raise ValueError(f"Unsupported GEV action: {action}")
         params = message.get("params", {})
