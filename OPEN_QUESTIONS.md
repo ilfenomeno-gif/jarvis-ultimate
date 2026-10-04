@@ -27,3 +27,22 @@ risultato atteso.
 
 Stato: BLOCKED fino alla risposta; nessun codice NVIDIA viene implementato in
 anticipo.
+
+## M1 — Convalida browser integrato (bloccante)
+
+- L'app Jarvis aggiornata si avvia e il plugin GEV/MCP è pronto, ma Gemini Live
+  resta in `Connecting...`; il comando testuale controllato non raggiunge il
+  dispatch tool.
+- Tre harness Qt/WebEngine isolati sono terminati con codice nativo Windows
+  `0xC0000409` prima di produrre risultati.
+- I test unitari coprono parsing URL, allow-list, signal wrapper e ripristino
+  stack simulato; non provano il caricamento HTTP reale né cronologia.
+
+**Domanda:** appena la sessione Gemini è collegata o il runtime Qt/WebEngine è
+disponibile per test interattivi, verificare nel Jarvis i criteri browser in
+`docs/impl/M01-integrated-browser.md` (YouTube/example.com, back/forward/reload,
+close e rifiuto schemi). Non servono nuove chiavi o modifiche a `.env` per
+implementazione; non registrare segreti nei log.
+
+Stato: BLOCKED; il codice resta committato in branch M1 ma la meccanica non è
+DONE.

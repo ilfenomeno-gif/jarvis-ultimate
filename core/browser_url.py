@@ -11,6 +11,10 @@ _SITE_ALIASES = {
 }
 
 
+def is_allowed_http_scheme(scheme: str) -> bool:
+    return scheme.casefold() in {"http", "https"}
+
+
 def normalize_http_url(value: str) -> str:
     """Return a normalized HTTP(S) URL, rejecting non-web schemes."""
     if not isinstance(value, str):
@@ -19,6 +23,8 @@ def normalize_http_url(value: str) -> str:
     candidate = value.strip()
     if not candidate:
         raise ValueError("URL cannot be empty")
+    if any(ord(char) < 32 or ord(char) == 127 for char in candidate):
+        raise ValueError("URL cannot contain control characters")
 
     alias = _SITE_ALIASES.get(candidate.casefold())
     if alias is not None:
@@ -55,7 +61,7 @@ def normalize_http_url(value: str) -> str:
         raise ValueError(f"Invalid web URL: {exc}") from exc
 
     scheme = parsed.scheme.casefold()
-    if scheme not in {"http", "https"}:
+    if not is_allowed_http_scheme(scheme):
         raise ValueError("Only http and https URLs are allowed")
     if not hostname or any(char.isspace() for char in hostname):
         raise ValueError("URL must include a valid host")

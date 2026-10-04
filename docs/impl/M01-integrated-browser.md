@@ -59,7 +59,9 @@ separato dalla pagina GEV e dal suo lifecycle.
   porte non valide.
 - UI: load di una pagina HTTP locale controllata; indietro/avanti/ricarica;
   chiusura che ripristina HUD o GEV; URL invalido non naviga; verifica che
-  QWebEngine browser e GEV restino widget distinti.
+  QWebEngine browser e GEV restino widget distinti. Harness Qt/WebEngine
+  isolato ha terminato con crash nativo; resta necessario il test interattivo
+  nell'app funzionante.
 - Gemini/tool: declaration `open_website`, dispatch, errore esplicito su input
   invalido e nessuna azione widget fuori dal thread GUI.
 - Regression: `pytest` mirato (poi suite Jarvis); GEV lifecycle e test già
@@ -69,15 +71,18 @@ separato dalla pagina GEV e dal suo lifecycle.
 
 ## 5. Criteri di accettazione (checklist PASS/FAIL)
 
-- [ ] "Apri YouTube" carica YouTube in un QWebEngineView dentro Jarvis.
-- [ ] `example.com` apre una pagina nel browser integrato.
-- [ ] Indietro, avanti, ricarica e chiudi funzionano; chiudi ripristina la vista
-  precedente.
-- [ ] `file://`, `javascript:`, `data:`, FTP e schemi non HTTP(S) sono rifiutati.
-- [ ] Parametri e testo URL non diventano codice JavaScript eseguibile.
-- [ ] GEV rimane isolato e funzionante.
-- [ ] Tutte le chiamate widget provenienti dal dispatch attraversano segnali
-  Qt e slot GUI.
+- [ ] YouTube/example.com e cronologia browser funzionano nel WebEngine live:
+  bloccato dalla sessione Gemini non connessa e dal crash dei test runtime.
+- [x] `file://`, `javascript:`, `data:`, FTP e altri schemi sono rifiutati dal
+  normalizzatore; test focused passati.
+- [x] La richiesta URL dal wrapper Jarvis passa attraverso un signal Qt; test
+  unitario pass.
+- [x] La logica stack conserva e ripristina la vista precedente; test unitario
+  con doppia apertura pass.
+- [x] GEV resta su widget/pagina distinti; app avviata dopo le modifiche, GEV
+  pronto con 30 tool MCP.
+- [ ] Nessuna navigazione malevola è stata eseguita nel WebEngine live;
+  l'allow-list dei redirect è implementata, ma non esiste ancora evidenza runtime.
 
 ## 6. Analisi di fattibilità del presente file (checklist GO/NO-GO + esito)
 
@@ -103,9 +108,24 @@ riscrittura della history.
 - 2026-10-04: diagnosi eseguita su checkout reale; GO prima dell'implementazione.
 - 2026-10-04: `core/browser_url.py` e `tests/test_browser_url.py` implementati;
   primo run 19/20 ha rilevato `localhost:porta/percorso`, correzione applicata;
-  test focused finale **20/20 PASS**; Pylance syntax e problemi senza errori.
-- Convalida: non ancora eseguita.
+  test URL iniziale **20/20 PASS**.
+- 2026-10-04: completati UI Qt, dichiarazione/dispatch `open_website`,
+  navigazione sicura e unit test; suite Jarvis **73/73 PASS**, compileall PASS,
+  Pylance syntax/problemi senza errori.
+- 2026-10-04: smoke app aggiornata mostra `JARVIS — MARK LII`; GEV/MCP pronto
+  con 30 tool. La sessione Gemini resta `Connecting...`; il comando testo non
+  dispatcha tool perché `JarvisLive._on_text_command` ritorna senza sessione.
+- 2026-10-04: tre prove runtime Qt/WebEngine isolate terminate con crash nativo
+  Windows `0xC0000409`, prima di produrre risultati; harness temporanei non
+  sono stati mantenuti. Navigazione e history reali non sono state convalidate.
+- Convalida: **BLOCKED**, in attesa di sessione Gemini attiva o verifica UI
+  interattiva con ambiente Qt/WebEngine funzionante.
 
 ## 9. Recap finale
 
-Da compilare dopo implementazione, test e convalida di tutti i criteri.
+Il browser integrato è implementato, con URL HTTP(S) validati, dichiarazione
+Gemini, segnali Qt, pagina distinta da GEV e controlli UI. Test focused/suite
+e avvio Jarvis passano. I criteri di navigazione live, YouTube, history e
+redirect non sono stati convalidati: la sessione Gemini non era disponibile e
+i test runtime WebEngine isolati hanno terminato con `0xC0000409`. Stato M1:
+**BLOCKED**, non DONE; completare la prova manuale prima di promuoverlo.

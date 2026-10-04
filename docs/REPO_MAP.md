@@ -1,7 +1,8 @@
 # Repository map — JARVIS Ultimate
 
-Ricognizione eseguita il 2026-10-04 sul checkout locale del repository
-`ilfenomeno-gif/jarvis-ultimate`, branch `feat/m00-repo-discovery`.
+Ricognizione M0 eseguita il 2026-10-04 sul checkout locale del repository
+`ilfenomeno-gif/jarvis-ultimate`, originariamente sul branch
+`feat/m00-repo-discovery`. I cicli successivi usano un branch dedicato ciascuno.
 
 ## Struttura
 
@@ -38,19 +39,19 @@ localmente e non sono sorgenti applicative.
 ## Interfaccia e navigazione esistente
 
 - UI desktop: `ui.py`, PyQt6.
-- `QStackedWidget` è importato in `ui.py:33` e usato in
-  `ui.py:2541` (`_hud_cam_stack`) e `ui.py:2545` (`_gev_stack`). Lo stack
-  centrale alterna HUD, feed camera e GEV; `_gev_stack` alterna placeholder e
-  GEV. Non è un browser generale né una cronologia di pagine.
-- `QWebEngineView` è importato in `ui.py:36` e istanziato in `ui.py:2551` per
-  GEV. Il page custom `_GEVWebEnginePage` intercetta messaggi bridge JSON
-  `GEV_MSG:` e li inoltra alla UI.
+- `QStackedWidget` è importato in `ui.py:33` e usato per `_hud_cam_stack`,
+  `_gev_stack` e (dopo M1) `_main_content_stack`. Quest'ultimo alterna il ramo
+  HUD/camera/GEV e la pagina browser separata.
+- `QWebEngineView` è importato in `ui.py:36`: una pagina serve GEV, una pagina
+  browser è stata aggiunta in M1. `_GEVWebEnginePage` intercetta il bridge JSON
+  `GEV_MSG:`; `_SafeBrowserPage` applica una allow-list di schemi HTTP(S).
 - `ui.py:3862` crea il pannello contenuti basato su `QTextEdit`, non un browser.
 - La navigazione URL attuale di `actions/browser_control.py` usa Playwright e
   `webbrowser.open`; non fornisce una scheda web dentro la finestra Jarvis.
-- **M1 adattata alla struttura reale:** aggiungere una pagina browser Qt
-  separata nello stack/contenitore centrale senza riutilizzare o alterare il
-  ciclo di vita GEV; verificare la proprietà e il ritorno allo stack HUD/GEV.
+- **M1 adattata alla struttura reale:** browser e GEV hanno pagine distinte;
+  il browser è commutato con segnali Qt e conserva la vista precedente. La
+  navigazione HTTP live non è ancora convalidata, vedi
+  `docs/impl/M01-integrated-browser.md`.
 
 ## Azioni, plugin e Gemini
 
@@ -90,8 +91,8 @@ localmente e non sono sorgenti applicative.
 |---|---|---|
 | `ui.py` | **CONFERMATA** | Contiene `JarvisUI` e `MainWindow`, il loop Qt, gli stack e la QWebEngineView GEV. |
 | `plugins/gev_plugin.py` | **CONFERMATA** | Definisce `PLUGIN`, schema azione e lifecycle del server GEV/MCP. |
-| `QWebEngineView` | **CONFERMATA** | Importata e usata esclusivamente per la vista GEV in `ui.py:2551` nel percorso esaminato. |
-| `QStackedWidget` | **CONFERMATA** | Due stack: HUD/camera/GEV e placeholder/vista GEV; non è un browser generale già pronto. |
+| `QWebEngineView` | **CONFERMATA** | Usata per GEV e per il widget browser separato aggiunto in M1; caricamento live browser ancora da convalidare. |
+| `QStackedWidget` | **CONFERMATA** | Gli stack iniziali GEV/HUD sono confermati; M1 aggiunge lo stack contenitore che alterna HUD/GEV e browser. |
 
 ## Baseline prima delle modifiche M0
 

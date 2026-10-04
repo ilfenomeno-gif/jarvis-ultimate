@@ -180,8 +180,8 @@ TOOL_DECLARATIONS = [
         "name": "open_app",
         "description": (
             "Opens any application on the computer. "
-            "Use this whenever the user asks to open, launch, or start any app, "
-            "website, or program. This includes GeoGuessr and speech-recognition "
+            "Use this whenever the user asks to open, launch, or start an app or "
+            "program. For websites, use open_website. This includes GeoGuessr and speech-recognition "
             "variants such as 'Gio Gasser', 'Jao Gasser', or 'Geo Guesser'; "
             "send those to Steam search instead of using web_search. "
             "Always call this tool — never just say you opened it."
@@ -192,7 +192,7 @@ TOOL_DECLARATIONS = [
                 "app_name": {
                     "type": "STRING",
                     "description": (
-                        "Application or website name. Preserve the user's words when unsure; "
+                        "Application or program name, not a website URL. "
                         "GeoGuessr variants are normalized automatically. Examples: "
                         "'WhatsApp', 'Chrome', 'Spotify', 'GeoGuessr'."
                     )
@@ -200,6 +200,23 @@ TOOL_DECLARATIONS = [
             },
             "required": ["app_name"]
         }
+    },
+    {
+        "name": "open_website",
+        "description": (
+            "Opens a website inside Jarvis's integrated browser. Use for website "
+            "names such as YouTube or an HTTP(S) URL; do not launch an external browser."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "url": {
+                    "type": "STRING",
+                    "description": "Website name or URL using only http or https.",
+                },
+            },
+            "required": ["url"],
+        },
     },
     {
         "name": "web_search",
@@ -392,9 +409,11 @@ TOOL_DECLARATIONS = [
     {
         "name": "browser_control",
         "description": (
-            "Controls any web browser. Use for: opening websites, searching the web, "
-            "clicking elements, filling forms, scrolling, screenshots, navigation, any web-based task. "
-            "Simple open/search requests launch the user's own browser normally (their real profile "
+            "Controls the user's external web browser. For a website that should open "
+            "inside Jarvis, use open_website instead. Use this for searching, clicking "
+            "elements, filling forms, scrolling, screenshots, navigation, or an explicit "
+            "request to use an external browser. Simple open/search requests launch the "
+            "user's browser normally (their real profile "
             "and logged-in accounts); interactive actions (click, type, fill_form...) attach an "
             "automation browser. "
             "Always pass the 'browser' parameter when the user specifies a browser (e.g. 'open in Edge', "
@@ -1190,7 +1209,10 @@ class JarvisLive:
         name = fc.name
         args = dict(fc.args or {})
 
-        print(f"[JARVIS] 🔧 {name}  {args}")
+        logged_args = dict(args)
+        if name == "open_website" and "url" in logged_args:
+            logged_args["url"] = "[URL REDACTED]"
+        print(f"[JARVIS] 🔧 {name}  {logged_args}")
         self.ui.set_state("THINKING")
 
         decision = route_tool(name, args, self._last_user_text)
@@ -1242,6 +1264,10 @@ class JarvisLive:
             elif name == "open_app":
                 r = await loop.run_in_executor(None, lambda: open_app(parameters=args, response=None, player=self.ui))
                 result = r or f"Opened {args.get('app_name')}."
+
+            elif name == "open_website":
+                self.ui.open_url_in_webview(args.get("url"))
+                result = "Opening the website inside Jarvis."
 
             elif name == "weather_report":
                 r = await loop.run_in_executor(None, lambda: weather_action(parameters=args, player=self.ui))

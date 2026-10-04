@@ -25,14 +25,18 @@ byte-per-byte con la copia nella root.
 
 ## M1 — Browser integrato
 
-Stato: IN_PROGRESS
+Stato: BLOCKED
 Branch: `feat/m01-integrated-browser`
 File toccati: `docs/impl/M01-integrated-browser.md`, `core/browser_url.py`,
-`tests/test_browser_url.py`, `PROGRESS.md`
-Verifica: GO di fattibilità; test URL focused 20/20 PASS.
-Convalida: non iniziata.
-Problemi aperti: test reale Qt/WebEngine ancora da eseguire.
-Recap: browser separato dal GEV, URL HTTP(S) e segnali Qt definiti nel piano.
+`tests/test_browser_url.py`, `ui.py`, `main.py`, `PROGRESS.md`
+Verifica: PASS parziale — suite 73/73, compileall, syntax/Pylance; smoke app
+con finestra Jarvis e GEV/MCP pronto.
+Convalida: BLOCKED — nessuna navigazione browser verificabile; Gemini è rimasto
+`Connecting...` e tre harness Qt/WebEngine hanno terminato con `0xC0000409`.
+Problemi aperti: serve sessione Live attiva o verifica interattiva WebEngine per
+YouTube/example.com, history e redirect.
+Recap: implementata vista browser separata, signal Qt, tool Gemini e allow-list
+HTTP(S); non dichiarata DONE senza evidenza funzionale.
 
 ## M2 — Interazione attiva
 
@@ -67,4 +71,5 @@ Recap: nessuna implementazione prima di una risposta esplicita.
 
 ## Prossimo passo
 
-Completare implementazione, verifica e convalida M1; poi iniziare M2.
+Continuare M2 e M3 come cicli distinti. Tornare a M1 per la convalida browser
+live appena l'ambiente Gemini/WebEngine lo consente.
