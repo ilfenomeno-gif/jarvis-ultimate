@@ -39,6 +39,7 @@ from core.browser_interaction import (
     build_click_link_script, build_keyboard_event_script,
     normalize_link_text, normalize_web_key,
 )
+from core.page_reader import MAX_PAGE_CHARS, PageSpeechWorker
 from core.browser_url import is_allowed_http_scheme, normalize_http_url
 
 _GEV_URL = "http://127.0.0.1:4173/?ui=panels"
@@ -2447,6 +2448,9 @@ class MainWindow(QMainWindow):
     _browser_close_sig = pyqtSignal()
     _browser_key_sig = pyqtSignal(str)
     _browser_click_sig = pyqtSignal(str)
+    _browser_read_page_sig = pyqtSignal()
+    _browser_stop_reading_sig = pyqtSignal()
+    _page_reader_audio_sig = pyqtSignal(bool)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -2655,6 +2659,14 @@ class MainWindow(QMainWindow):
         self._browser_close_sig.connect(self.close_browser)
         self._browser_key_sig.connect(self._press_key_in_webview)
         self._browser_click_sig.connect(self._click_link_in_webview)
+        self._browser_read_page_sig.connect(self._read_page_aloud)
+        self._browser_stop_reading_sig.connect(self._stop_page_reading)
+        self._page_read_pending = False
+        self._page_reader = PageSpeechWorker(
+            on_error=self._log_sig.emit,
+            on_started=self._page_reader_started,
+            on_finished=self._page_reader_finished,
+        )
         # Widget system state
         self._active_widgets: dict[str, QWidget] = {}
         self._toast_timers:   dict[str, QTimer]  = {}
@@ -2970,6 +2982,71 @@ class MainWindow(QMainWindow):
         else:
             self._log_sig.emit("Browser: link visibile non trovato")
 
+    def _read_page_aloud(self) -> None:
+        if self._main_content_stack.currentWidget() is not self._browser_panel:
+            self._log_sig.emit("Screen reader: aprire prima una pagina nel browser Jarvis")
+            return
+        if self._page_read_pending or self._page_reader.is_running:
+            self._log_sig.emit("Screen reader: una lettura è già in corso")
+            return
+        self._page_read_pending = True
+        self._page_reader_audio_sig.emit(True)
+        try:
+            self._browser_page.runJavaScript(
+                "document.body ? "
+                f"document.body.innerText.slice(0, {MAX_PAGE_CHARS + 1}) : ''",
+                self._on_browser_page_text,
+            )
+        except RuntimeError as exc:
+            self._page_read_pending = False
+            self._page_reader_audio_sig.emit(False)
+            self._log_sig.emit(f"Screen reader: estrazione DOM non riuscita: {exc}")
+
+    def _on_browser_page_text(self, page_text: object) -> None:
+        if not self._page_read_pending:
+            return
+        self._page_read_pending = False
+        if not isinstance(page_text, str):
+            self._page_reader_audio_sig.emit(False)
+            self._browser_status.setText("Page text unavailable")
+            self._log_sig.emit("Screen reader: estrazione del testo pagina non riuscita")
+            return
+        try:
+            plan = self._page_reader.start(page_text)
+        except (TypeError, ValueError, RuntimeError) as exc:
+            self._page_reader_audio_sig.emit(False)
+            self._browser_status.setText("Page reading unavailable")
+            self._log_sig.emit(f"Screen reader: {exc}")
+            return
+        suffix = "; testo limitato" if plan.truncated else ""
+        self._browser_status.setText(f"Reading page ({len(plan.chunks)} chunks)")
+        self._log_sig.emit(
+            f"Screen reader: lettura avviata in {len(plan.chunks)} chunk{suffix}"
+        )
+
+    def _page_reader_started(self) -> None:
+        self._page_reader_audio_sig.emit(True)
+
+    def _page_reader_finished(self) -> None:
+        self._page_reader_audio_sig.emit(False)
+
+    def _stop_page_reading(self) -> None:
+        if self._page_read_pending:
+            self._page_read_pending = False
+            self._page_reader_audio_sig.emit(False)
+            self._log_sig.emit("Screen reader: lettura DOM annullata")
+            return
+        try:
+            stopped = self._page_reader.stop()
+        except Exception as exc:
+            self._log_sig.emit(f"Screen reader: arresto non riuscito: {exc}")
+            return
+        if stopped:
+            self._browser_status.setText("Page reading stop requested")
+            self._log_sig.emit("Screen reader: arresto richiesto")
+        else:
+            self._log_sig.emit("Screen reader: nessuna lettura in corso")
+
     def _update_browser_navigation(self, _url: QUrl | None = None) -> None:
         self._browser_back_button.setEnabled(self._browser_view.history().canGoBack())
         self._browser_forward_button.setEnabled(
@@ -2991,6 +3068,15 @@ class MainWindow(QMainWindow):
         else:
             self._main_content_stack.setCurrentWidget(self._hud_cam_stack)
         self._browser_return_widget = None
+
+    def closeEvent(self, event) -> None:
+        self._page_read_pending = False
+        self._page_reader_audio_sig.emit(False)
+        try:
+            self._page_reader.stop()
+        except Exception as exc:
+            self._log_sig.emit(f"Screen reader: arresto alla chiusura non riuscito: {exc}")
+        super().closeEvent(event)
 
     def _expand_gev_navigation_panels(self) -> None:
         if not self._gev_tab_open or not self._gev_ready_evt.is_set():
@@ -4906,6 +4992,12 @@ class JarvisUI:
         normalized_text = normalize_link_text(link_text)
         self._win._browser_click_sig.emit(normalized_text)
         return normalized_text
+
+    def read_page_aloud(self) -> None:
+        self._win._browser_read_page_sig.emit()
+
+    def stop_reading(self) -> None:
+        self._win._browser_stop_reading_sig.emit()
 
     def close_webview(self) -> None:
         self._win._browser_close_sig.emit()

@@ -493,6 +493,27 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "read_page",
+        "description": (
+            "Reads the page currently open in Jarvis's integrated browser aloud "
+            "using offline speech. Use stop_reading to interrupt."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "stop_reading",
+        "description": "Stops Jarvis's integrated browser page reader.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
         "name": "file_controller",
         "description": "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, disk usage.",
         "parameters": {
@@ -932,6 +953,7 @@ class JarvisLive:
         self._loop                = None
         self._is_speaking         = False
         self._speaking_lock       = threading.Lock()
+        self._page_reader_audio_active = threading.Event()
         self._phone_active        = False   # True while phone mic is streaming; pauses PC mic
         self._pending_vision       = None    # (img_bytes, mime_type, question, angle) to inject after tool response
         self._vision_cam_active    = False   # True if camera was opened for vision → auto-close after response
@@ -944,6 +966,9 @@ class JarvisLive:
         self.ui.on_interrupt      = self.interrupt
         self.ui.on_voice_change   = self._on_voice_change     # voice picker → rebuild session
         self.ui.on_audio_device_change = self._on_audio_device_change
+        self.ui._win._page_reader_audio_sig.connect(
+            self._set_page_reader_audio_active
+        )
         self._reconnect_event: asyncio.Event | None = None
         self._reconnect_keep = True   # False → next rebuild drops the resumption handle
 
@@ -1128,6 +1153,13 @@ class JarvisLive:
             self.ui.set_state("SPEAKING")
         elif not self.ui.muted:
             self.ui.set_state("LISTENING")
+
+    def _set_page_reader_audio_active(self, active: bool) -> None:
+        if active:
+            self._page_reader_audio_active.set()
+            self.set_speaking(False)
+        else:
+            self._page_reader_audio_active.clear()
 
     def interrupt(self) -> None:
         """Stop JARVIS mid-speech: drain queued audio and open mic immediately."""
@@ -1323,6 +1355,14 @@ class JarvisLive:
             elif name == "read_active_page":
                 r = await loop.run_in_executor(None, lambda: read_active_page(parameters=args, player=self.ui))
                 result = r or "Could not read the page."
+
+            elif name == "read_page":
+                self.ui.read_page_aloud()
+                result = "Requested offline reading of the integrated browser page."
+
+            elif name == "stop_reading":
+                self.ui.stop_reading()
+                result = "Requested that the integrated browser page reader stop."
 
             elif name == "file_controller":
                 r = await loop.run_in_executor(None, lambda: file_controller(parameters=args, player=self.ui))
@@ -1776,7 +1816,8 @@ class JarvisLive:
                         self._turn_done_event.clear()
                     continue
 
-                self.set_speaking(True)
+                if not self._page_reader_audio_active.is_set():
+                    self.set_speaking(True)
 
                 # Batch all immediately-available chunks into one write to reduce
                 # thread-pool round-trips (was one asyncio.to_thread per 50ms slice).
@@ -1789,12 +1830,15 @@ class JarvisLive:
                         break
 
                 # Drive the HUD waveform from JARVIS's own voice while speaking.
-                try:
-                    self.ui.set_audio_level(_pcm_level(
-                        np.frombuffer(bytes(batch), dtype=np.int16)))
-                except Exception:
-                    pass
+                if not self._page_reader_audio_active.is_set():
+                    try:
+                        self.ui.set_audio_level(_pcm_level(
+                            np.frombuffer(bytes(batch), dtype=np.int16)))
+                    except Exception:
+                        pass
 
+                if self._page_reader_audio_active.is_set():
+                    continue
                 try:
                     await asyncio.to_thread(stream.write, bytes(batch))
                 except (RuntimeError, asyncio.CancelledError):
