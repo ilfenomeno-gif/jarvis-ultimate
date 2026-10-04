@@ -52,6 +52,14 @@ localmente e non sono sorgenti applicative.
   il browser è commutato con segnali Qt e conserva la vista precedente. La
   navigazione HTTP live non è ancora convalidata, vedi
   `docs/impl/M01-integrated-browser.md`.
+- **M2:** `main.py` dichiara `press_key` e `click_link`; `ui.py` instrada
+  richieste con segnali Qt e usa `core/browser_interaction.py` per whitelist,
+  payload JSON e script DOM. La convalida su pagina/gioco reale resta bloccata.
+- **M3:** `read_page` estrae testo limitato da `document.body.innerText` con
+  callback asincrona; `core/page_reader.py` normalizza a 20.000 caratteri,
+  segmenta a 800 e parla in un worker pyttsx3. `stop_reading` usa `engine.stop`;
+  l'audio Gemini viene drenato mentre il worker è attivo. La sintesi reale non è
+  convalidata per il warning audio della baseline.
 
 ## Azioni, plugin e Gemini
 
@@ -80,8 +88,11 @@ localmente e non sono sorgenti applicative.
 - `pytest` è installato. `pyttsx3` è elencato nelle dipendenze e presente
   nell'ambiente; `core/accessibility.py` espone `Pyttsx3Backend`, con chiamate
   sincrone protette da lock, quindi M3 non deve invocarle sul thread GUI.
-- `core/tts.py` contiene altri backend TTS di Jarvis; il riuso deve considerare
-  conflitti audio e arresto/cancellazione.
+- `core/tts.py` contiene altri backend TTS di Jarvis; M3 usa pyttsx3 isolato in
+  worker e sopprime l'output Gemini per evitare sovrapposizioni.
+  `Pyttsx3Backend.speak_interruptibly` pilota l'event loop esterno nel worker;
+  `engine.stop()` viene chiamato dallo stesso thread, senza blocco del lock
+  mantenuto da `runAndWait()`.
 - Il file locale `config/api_keys.json` esiste ma non è stato aperto né copiato.
   `.env.local` non è stato letto o modificato.
 

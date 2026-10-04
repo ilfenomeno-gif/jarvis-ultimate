@@ -65,3 +65,23 @@ Snake con freccia su, click su link visibile e pagina che richiede input
 `isTrusted`; verificare che link ambiguo/non trovato non venga cliccato.
 
 Stato: BLOCKED; non serve una scelta per proseguire con M3.
+
+## M3 — Convalida voce screen reader (bloccante)
+
+- I test coprono testo vuoto/lunghissimo, limite di estrazione, chunk <=800,
+  worker separato, richiesta stop, engine fake pilotato solo dal thread worker
+  e callback che sopprime l'audio Gemini.
+- `pyttsx3` è importabile nell'interprete selezionato; il backend audio host
+  della baseline però è stato saltato perché non produceva audio. Non è stata
+  eseguita sintesi reale, perciò la risposta del dispositivo e l'interruzione
+  audio in tempo reale con il driver Windows non sono note.
+- La pagina letta dipende dal browser M1, la cui navigazione live è ancora
+  bloccata.
+
+**Azione di convalida futura:** con audio funzionante e una pagina aperta in
+Jarvis, verificare lettura fluida, GUI reattiva, stop entro pochi secondi e
+assenza di voce Gemini sovrapposta. Verificare pagina vuota e oltre 20.000
+caratteri anche nel browser; i test unitari già coprono le funzioni di limite.
+
+Stato: BLOCKED; nessuna nuova credenziale è richiesta, si può passare alla
+scelta M4.

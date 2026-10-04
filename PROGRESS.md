@@ -57,13 +57,22 @@ dichiarato DONE senza evidenza live.
 
 ## M3 — Screen reader personale
 
-Stato: TODO
+Stato: BLOCKED
 Branch: `feat/m03-screen-reader`
-File toccati: nessuno
-Verifica: non iniziata
-Convalida: non iniziata
-Problemi aperti: nessuno oltre alla diagnosi da completare nel ciclo M3.
-Recap: dipende dal browser integrato M1.
+File toccati: `core/page_reader.py`, `core/accessibility.py`, `ui.py`, `main.py`,
+`tests/test_page_reader.py`, `docs/impl/M03-screen-reader.md`,
+`docs/REPO_MAP.md`, `OPEN_QUESTIONS.md`, `PROGRESS.md`
+Verifica: PASS — suite completa 111/111, compileall file M3, Pylance/Problems
+senza errori, `git diff --check` pulito; import main PASS con 37 tool univoci.
+Convalida: PASS parziale per testo vuoto/enorme, segmentazione, worker,
+stop fake, callback Qt e gate audio. BLOCKED per voce live, interazione browser
+e conflitto audio sul dispositivo reale.
+Problemi aperti: output audio host non produceva audio nella baseline; M1
+browser/Gemini live è tuttora bloccato. `pyttsx3` è installato, ma non si è
+eseguito TTS reale né si è stampata/modificata alcuna credenziale.
+Recap: letto DOM in callback async, max 20.000 caratteri/chunk <=800, pyttsx3
+in worker con event loop esterno e stop sullo stesso thread; l'audio Gemini
+viene drenato durante la lettura. Non dichiarato DONE senza prova audio reale.
 
 ## M4 — Integrazione NVIDIA
 
@@ -78,5 +87,5 @@ Recap: nessuna implementazione prima di una risposta esplicita.
 
 ## Prossimo passo
 
-Procedere con M3 sul branch dedicato; riprendere i criteri live M1/M2 quando
-l'ambiente Gemini/WebEngine lo consente.
+M0–M3 sono DONE o BLOCKED; attendere scelta utente M4. Riprendere i criteri
+live M1–M3 quando browser, sessione Gemini e output audio sono disponibili.
