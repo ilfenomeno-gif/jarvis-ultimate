@@ -25,13 +25,14 @@ byte-per-byte con la copia nella root.
 
 ## M1 — Browser integrato
 
-Stato: TODO
+Stato: IN_PROGRESS
 Branch: `feat/m01-integrated-browser`
-File toccati: nessuno
-Verifica: non iniziata
-Convalida: non iniziata
-Problemi aperti: nessuno oltre alla diagnosi da completare nel ciclo M1.
-Recap: dipende dalla baseline M0 completata.
+File toccati: `docs/impl/M01-integrated-browser.md`, `core/browser_url.py`,
+`tests/test_browser_url.py`, `PROGRESS.md`
+Verifica: GO di fattibilità; test URL focused 20/20 PASS.
+Convalida: non iniziata.
+Problemi aperti: test reale Qt/WebEngine ancora da eseguire.
+Recap: browser separato dal GEV, URL HTTP(S) e segnali Qt definiti nel piano.
 
 ## M2 — Interazione attiva
 
@@ -66,5 +67,4 @@ Recap: nessuna implementazione prima di una risposta esplicita.
 
 ## Prossimo passo
 
-Avviare il ciclo M1 sul branch `feat/m01-integrated-browser`, dopo la
-conclusione del ciclo M0.
+Completare implementazione, verifica e convalida M1; poi iniziare M2.
