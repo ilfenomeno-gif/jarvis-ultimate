@@ -28,8 +28,6 @@ _ALLOWED_EXECUTABLES = {
     "code", "shutdown", "systemctl", "schtasks", "launchctl", "crontab",
     "ufw", "firewall-cmd", "iptables", "pkexec", "sudo", "nmcli", "xset",
     "networksetup", "pmset", "msg",
-    # GEV: node.exe per avvio locale God's Eye View
-    "node", "node.exe",
 }
 
 
