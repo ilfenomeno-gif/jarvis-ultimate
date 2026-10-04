@@ -13,7 +13,6 @@ import inspect
 import re
 import sys
 import traceback
-from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -34,69 +33,13 @@ class PluginRecord:
     file: str = ""
     valid: bool = False
     error: str = ""
-    start: Optional[Callable] = None
-    stop: Optional[Callable] = None
-    extra_tool_declarations: Optional[Callable] = None
-    run_extra_tool: Optional[Callable] = None
 
 
 class PluginRegistry:
-    def __init__(
-        self,
-        plugins: dict[str, PluginRecord],
-        logger: Callable[[str], None],
-        reserved_tool_names: set[str] | None = None,
-    ):
+    def __init__(self, plugins: dict[str, PluginRecord], logger: Callable[[str], None]):
         self._plugins = plugins          # name -> PluginRecord, VALID entries only
         self._all_records: list[PluginRecord] = []   # valid + invalid, for UI listing
         self._logger = logger
-        self._reserved_tool_names = set(reserved_tool_names or ()) | set(plugins)
-        self._extra_tool_routes: dict[str, PluginRecord] = {}
-        self._extra_tools_loaded: set[str] = set()
-        self._extra_declarations_cache: dict[str, list[dict]] = {}
-
-    # GEV lifecycle hook
-    def start_all(self) -> None:
-        """Start plugin lifecycle hooks in discovery order."""
-        for name, rec in self._plugins.items():
-            if not callable(rec.start):
-                continue
-            try:
-                rec.start()
-            except Exception as exc:
-                self._logger(f"Plugin '{name}' failed during start(): {exc}")
-
-    # GEV lifecycle hook
-    def stop_all(self, timeout: float = 5.0) -> None:
-        """Stop plugin lifecycle hooks in reverse order within a time limit."""
-        hooks = [
-            (name, rec.stop)
-            for name, rec in reversed(self._plugins.items())
-            if callable(rec.stop)
-        ]
-        if not hooks:
-            return
-
-        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="plugin-stop")
-        futures = [(name, executor.submit(stop)) for name, stop in hooks]
-        try:
-            done, _ = wait(
-                [future for _, future in futures],
-                timeout=max(0.0, timeout),
-            )
-            for name, future in futures:
-                if future not in done:
-                    future.cancel()
-                    self._logger(
-                        f"Plugin '{name}' stop timed out after {timeout:.1f} seconds."
-                    )
-                    continue
-                try:
-                    future.result()
-                except Exception as exc:
-                    self._logger(f"Plugin '{name}' failed during stop(): {exc}")
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
 
     # -- called by main.py at LiveConnectConfig build time --
     def get_tool_declarations(self) -> list[dict]:
@@ -108,106 +51,24 @@ class PluginRegistry:
                     "description": rec.description,
                     "parameters": rec.parameters,
                 })
-                decls.extend(self._load_extra_tool_declarations(rec))
         return decls
 
     def has(self, name: str) -> bool:
-        if name in self._plugins:
-            return True
-        self._load_all_extra_tool_declarations()
-        return name in self._extra_tool_routes
+        return name in self._plugins
 
     # -- called by main.py from _execute_tool's else branch --
     def run(self, name: str, parameters: dict, player=None, session_memory=None) -> str:
         rec = self._plugins.get(name)
-        extra_tool_name = None
-        if rec is None:
-            self._load_all_extra_tool_declarations()
-            rec = self._extra_tool_routes.get(name)
-            if rec is not None:
-                extra_tool_name = name
         if rec is None or not rec.valid:
             return f"Plugin '{name}' is not available."
-        if not get_plugin_enabled(rec.name):
-            plugin_name = rec.name
-            return f"The '{plugin_name}' plugin is currently disabled."
+        if not get_plugin_enabled(name):
+            return f"The '{name}' plugin is currently disabled."
         try:
-            if extra_tool_name is not None and callable(rec.run_extra_tool):
-                return rec.run_extra_tool(
-                    extra_tool_name,
-                    parameters,
-                    player=player,
-                ) or "Done."
             return _call_run(rec.run, parameters, player, session_memory) or "Done."
         except Exception as e:
-            self._logger(f"Plugin '{rec.name}' crashed during run(): {e}")
+            self._logger(f"Plugin '{name}' crashed during run(): {e}")
             traceback.print_exc()
-            return f"Sir, the '{rec.name}' plugin failed: {e}"
-
-    def _load_all_extra_tool_declarations(self) -> None:
-        for rec in self._plugins.values():
-            if get_plugin_enabled(rec.name):
-                self._load_extra_tool_declarations(rec)
-
-    def _load_extra_tool_declarations(self, rec: PluginRecord) -> list[dict]:
-        if rec.name in self._extra_tools_loaded:
-            return [
-                declaration
-                for declaration in self._extra_declarations_cache.get(rec.name, [])
-            ]
-        provider = rec.extra_tool_declarations
-        if not callable(provider):
-            self._extra_tools_loaded.add(rec.name)
-            self._cache_extra_declarations(rec.name, [])
-            return []
-
-        try:
-            declarations = provider()
-        except Exception as exc:
-            self._logger(
-                f"Plugin '{rec.name}' could not provide extra tools: {exc}"
-            )
-            return []
-        if not isinstance(declarations, list):
-            self._logger(
-                f"Plugin '{rec.name}' returned invalid extra tool declarations."
-            )
-            return []
-
-        accepted = []
-        for declaration in declarations:
-            if (
-                not isinstance(declaration, dict)
-                or not isinstance(declaration.get("name"), str)
-                or not _NAME_RE.match(declaration["name"])
-                or not isinstance(declaration.get("description"), str)
-                or not declaration["description"].strip()
-                or not isinstance(declaration.get("parameters"), dict)
-                or declaration["parameters"].get("type") != "OBJECT"
-            ):
-                self._logger(
-                    f"Plugin '{rec.name}' returned a malformed extra tool declaration."
-                )
-                continue
-            tool_name = declaration["name"]
-            if tool_name in self._reserved_tool_names or tool_name in self._extra_tool_routes:
-                self._logger(
-                    f"Plugin '{rec.name}' extra tool '{tool_name}' collides with another tool."
-                )
-                continue
-            self._extra_tool_routes[tool_name] = rec
-            accepted.append({
-                "name": tool_name,
-                "description": declaration["description"].strip(),
-                "parameters": declaration["parameters"],
-            })
-
-        self._extra_tools_loaded.add(rec.name)
-        self._cache_extra_declarations(rec.name, accepted)
-        return accepted
-
-    def _cache_extra_declarations(self, name: str, declarations: list[dict]) -> None:
-        self._extra_declarations_cache[name] = declarations
+            return f"Sir, the '{name}' plugin failed: {e}"
 
     # -- called by ui.py's Plugin Manager overlay --
     def list_for_ui(self) -> list[dict]:
@@ -265,21 +126,8 @@ def _validate(module, filename: str) -> PluginRecord:
         return PluginRecord(name=name, file=filename,
                              error="Missing callable run(parameters, ...) function.")
 
-    start_fn = getattr(module, "start", None)
-    stop_fn = getattr(module, "stop", None)
-    extra_tools_fn = getattr(module, "get_extra_tool_declarations", None)
-    run_extra_fn = getattr(module, "run_extra_tool", None)
-
     return PluginRecord(name=name, description=description.strip(), parameters=parameters,
-                         run=run_fn, file=filename, valid=True, error="",
-                         start=start_fn if callable(start_fn) else None,
-                         stop=stop_fn if callable(stop_fn) else None,
-                         extra_tool_declarations=(
-                             extra_tools_fn if callable(extra_tools_fn) else None
-                         ),
-                         run_extra_tool=(
-                             run_extra_fn if callable(run_extra_fn) else None
-                         ))
+                         run=run_fn, file=filename, valid=True, error="")
 
 
 def discover_plugins(plugins_dir: Path, core_tool_names: set[str],
@@ -341,7 +189,7 @@ def discover_plugins(plugins_dir: Path, core_tool_names: set[str],
         else:
             logger(f"Plugin rejected: {path.name} — {rec.error}")
 
-    registry = PluginRegistry(valid, logger, reserved_tool_names=core_tool_names)
+    registry = PluginRegistry(valid, logger)
     registry._all_records = all_records
     logger(f"Plugin discovery complete: {len(valid)} active, "
            f"{len(all_records) - len(valid)} rejected, {len(all_records)} total.")

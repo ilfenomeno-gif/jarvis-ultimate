@@ -1,5 +1,4 @@
-PyQt6==6.11.0
-PyQt6-WebEngine==6.11.0
+PyQt6
 sounddevice
 google-genai>=2.8.0
 google-generativeai
