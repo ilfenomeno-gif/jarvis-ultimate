@@ -928,6 +928,16 @@ class JarvisLive:
             core_tool_names=_core_names,
             logger=lambda msg: (print(f"[Plugins] {msg}"), self.ui.write_log(f"SYS: {msg}")),
         )
+        # GEV lifecycle hook
+        self._shutdown_event = threading.Event()
+        # GEV lifecycle hook
+        self._plugins_stopped_evt = threading.Event()
+        # GEV lifecycle hook
+        threading.Thread(
+            target=self._plugin_registry.start_all,
+            name="gev-start",
+            daemon=True,
+        ).start()
         self.ui.get_plugins = self._plugin_registry.list_for_ui
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
 
@@ -1418,6 +1428,13 @@ class JarvisLive:
                             pass
                     await asyncio.sleep(1.5)
                     import os as _os
+                    # GEV lifecycle hook
+                    if not self._plugins_stopped_evt.is_set():
+                        self._plugins_stopped_evt.set()
+                        try:
+                            self._plugin_registry.stop_all(timeout=5.0)
+                        except Exception:
+                            pass
                     _os._exit(0)
                 asyncio.create_task(_do_shutdown())
 
@@ -2047,6 +2064,8 @@ class JarvisLive:
 
     async def run(self):
         self._loop = asyncio.get_event_loop()
+        # GEV lifecycle hook
+        self._main_task = asyncio.current_task()
         self._reconnect_event = asyncio.Event()
 
         # ── Wire the shared core services to the interface ───────────────────
@@ -2081,165 +2100,178 @@ class JarvisLive:
             print(f"[Dashboard] Disabled: {e}")
             self._dashboard = None
 
-        while True:
-            try:
-                print("[JARVIS] Connecting...")
-                self.ui.set_state("THINKING")
-                _resumed_with = self._resume_handle is not None
-                config = self._build_config()
+        # GEV lifecycle hook
+        try:
+            # GEV lifecycle hook
+            while not self._shutdown_event.is_set():
+                try:
+                    print("[JARVIS] Connecting...")
+                    self.ui.set_state("THINKING")
+                    _resumed_with = self._resume_handle is not None
+                    config = self._build_config()
 
-                # Fresh client on every reconnect — avoids stale HTTP session state
-                # v1alpha carries the enhanced audio features (affective dialog,
-                # proactive audio); if they get rejected we fall back to v1beta.
-                client = genai.Client(
-                    api_key=_get_api_key(),
-                    http_options={"api_version": "v1alpha" if self._enhanced_live else "v1beta"}
-                )
+                    # Fresh client on every reconnect — avoids stale HTTP session state
+                    # v1alpha carries the enhanced audio features (affective dialog,
+                    # proactive audio); if they get rejected we fall back to v1beta.
+                    client = genai.Client(
+                        api_key=_get_api_key(),
+                        http_options={"api_version": "v1alpha" if self._enhanced_live else "v1beta"}
+                    )
 
-                async with (
-                    client.aio.live.connect(model=LIVE_MODEL, config=config) as session,
-                    asyncio.TaskGroup() as tg,
-                ):
-                    self.session          = session
-                    self.audio_in_queue   = asyncio.Queue()
-                    self.out_queue        = asyncio.Queue(maxsize=200)
-                    self._turn_done_event = asyncio.Event()
+                    async with (
+                        client.aio.live.connect(model=LIVE_MODEL, config=config) as session,
+                        asyncio.TaskGroup() as tg,
+                    ):
+                        self.session          = session
+                        self.audio_in_queue   = asyncio.Queue()
+                        self.out_queue        = asyncio.Queue(maxsize=200)
+                        self._turn_done_event = asyncio.Event()
 
-                    # Reset transient state that must not carry over from a previous session
-                    self._pending_vision       = None
-                    self._vision_cam_active    = False
-                    self._vision_close_pending = False
-                    self._vision_busy          = False
-                    self._vision_last_time     = 0.0
-                    self._interrupted          = False
+                        # Reset transient state that must not carry over from a previous session
+                        self._pending_vision       = None
+                        self._vision_cam_active    = False
+                        self._vision_close_pending = False
+                        self._vision_busy          = False
+                        self._vision_last_time     = 0.0
+                        self._interrupted          = False
 
-                    print("[JARVIS] Connected.")
-                    if _resumed_with:
-                        # Say it plainly: the difference between "it reconnected"
-                        # and "it reconnected and still knows what we were doing"
-                        # is the whole point, and it is invisible otherwise.
-                        self.ui.write_log("SYS: Reconnected — conversation restored.")
-                    self.ui.set_state("LISTENING")
-                    self.ui.write_log("SYS: JARVIS online.")
+                        print("[JARVIS] Connected.")
+                        if _resumed_with:
+                            # Say it plainly: the difference between "it reconnected"
+                            # and "it reconnected and still knows what we were doing"
+                            # is the whole point, and it is invisible otherwise.
+                            self.ui.write_log("SYS: Reconnected — conversation restored.")
+                        self.ui.set_state("LISTENING")
+                        self.ui.write_log("SYS: JARVIS online.")
 
-                    if self._dashboard:
-                        await self._dashboard.broadcast({"type": "status", "state": "active"})
+                        if self._dashboard:
+                            await self._dashboard.broadcast({"type": "status", "state": "active"})
 
-                    self._reconnect_event.clear()  # ignore requests from before this session
-                    tg.create_task(self._watch_reconnect())
-                    tg.create_task(self._send_realtime())
-                    tg.create_task(self._listen_audio())
-                    tg.create_task(self._receive_audio())
-                    tg.create_task(self._play_audio())
-                    tg.create_task(self._run_system_monitor())
-                    tg.create_task(self._run_background_monitor())
-                    tg.create_task(self._run_proactive_mode())
-                    if self._dashboard:
-                        tg.create_task(self._relay_phone_audio())
+                        self._reconnect_event.clear()  # ignore requests from before this session
+                        tg.create_task(self._watch_reconnect())
+                        tg.create_task(self._send_realtime())
+                        tg.create_task(self._listen_audio())
+                        tg.create_task(self._receive_audio())
+                        tg.create_task(self._play_audio())
+                        tg.create_task(self._run_system_monitor())
+                        tg.create_task(self._run_background_monitor())
+                        tg.create_task(self._run_proactive_mode())
+                        if self._dashboard:
+                            tg.create_task(self._relay_phone_audio())
 
-                    # Morning briefing — fires once per process launch (if enabled)
-                    if not self._briefing_sent and get_brief_enabled():
-                        self._briefing_sent = True
-                        tg.create_task(self._send_startup_briefing())
+                        # Morning briefing — fires once per process launch (if enabled)
+                        if not self._briefing_sent and get_brief_enabled():
+                            self._briefing_sent = True
+                            tg.create_task(self._send_startup_briefing())
 
-            except KeyboardInterrupt:
-                raise
-            except SystemExit:
-                raise
-            except BaseException as e:
-                # Catches both Exception and BaseExceptionGroup (Python 3.11+
-                # TaskGroup raises BaseExceptionGroup when tasks are cancelled
-                # externally, which `except Exception` would miss, letting the
-                # exception escape the while-loop and causing asyncio.run() to
-                # start shutdown — resulting in "executor after shutdown" errors).
-                # Voluntary reconnect (voice change) — not an error. Rebuild the
-                # session immediately with no backoff and no scary logs.
-                if _is_reconnect_signal(e):
-                    print("[JARVIS] Voluntary reconnect requested.")
-                    if not _keep_context_of(e):
-                        # A deliberate clean slate (voice change) — drop the
-                        # handle so the next connect really does start empty.
+                except KeyboardInterrupt:
+                    raise
+                except SystemExit:
+                    raise
+                except BaseException as e:
+                    # Catches both Exception and BaseExceptionGroup (Python 3.11+
+                    # TaskGroup raises BaseExceptionGroup when tasks are cancelled
+                    # externally, which `except Exception` would miss, letting the
+                    # exception escape the while-loop and causing asyncio.run() to
+                    # start shutdown — resulting in "executor after shutdown" errors).
+                    # Voluntary reconnect (voice change) — not an error. Rebuild the
+                    # session immediately with no backoff and no scary logs.
+                    if _is_reconnect_signal(e):
+                        print("[JARVIS] Voluntary reconnect requested.")
+                        if not _keep_context_of(e):
+                            # A deliberate clean slate (voice change) — drop the
+                            # handle so the next connect really does start empty.
+                            self._resume_handle = None
+                        self._conn_backoff = 0
+                        continue
+
+                    # A resumption handle the server will not accept — expired, or
+                    # belonging to a session it has since dropped. Without this, the
+                    # same dead handle would be replayed on every retry and the
+                    # assistant would never come back at all: the feature meant to
+                    # survive a reconnect would be the thing preventing one. Drop it
+                    # once and let the next attempt start clean.
+                    if _resumed_with and (
+                        "resum" in str(e).lower()
+                        or "handle" in str(e).lower()
+                        or "INVALID_ARGUMENT" in str(e)
+                        or "NOT_FOUND" in str(e)
+                    ):
+                        print("[JARVIS] 🔗 Resumption handle rejected — starting a fresh session")
+                        self.ui.write_log("SYS: Could not restore the conversation — starting fresh.")
                         self._resume_handle = None
-                    self._conn_backoff = 0
-                    continue
+                        self._conn_backoff = 0
+                        continue
 
-                # A resumption handle the server will not accept — expired, or
-                # belonging to a session it has since dropped. Without this, the
-                # same dead handle would be replayed on every retry and the
-                # assistant would never come back at all: the feature meant to
-                # survive a reconnect would be the thing preventing one. Drop it
-                # once and let the next attempt start clean.
-                if _resumed_with and (
-                    "resum" in str(e).lower()
-                    or "handle" in str(e).lower()
-                    or "INVALID_ARGUMENT" in str(e)
-                    or "NOT_FOUND" in str(e)
-                ):
-                    print("[JARVIS] 🔗 Resumption handle rejected — starting a fresh session")
-                    self.ui.write_log("SYS: Could not restore the conversation — starting fresh.")
-                    self._resume_handle = None
-                    self._conn_backoff = 0
-                    continue
+                    err_str = str(e)
+                    print(f"[JARVIS] Error ({type(e).__name__}): {e}")
+                    traceback.print_exc()
 
-                err_str = str(e)
-                print(f"[JARVIS] Error ({type(e).__name__}): {e}")
-                traceback.print_exc()
+                    # Enhanced audio features rejected by the server (preview API
+                    # drift) — drop them and reconnect with the plain config.
+                    if self._enhanced_live and (
+                        "INVALID_ARGUMENT" in err_str
+                        or "affective" in err_str.lower()
+                        or "proactiv" in err_str.lower()
+                        or "Unknown name" in err_str
+                        or "unexpected keyword" in err_str
+                    ):
+                        self._enhanced_live = False
+                        self.ui.write_log(
+                            "SYS: Advanced audio features unavailable — reconnecting without them."
+                        )
+                        continue
 
-                # Enhanced audio features rejected by the server (preview API
-                # drift) — drop them and reconnect with the plain config.
-                if self._enhanced_live and (
-                    "INVALID_ARGUMENT" in err_str
-                    or "affective" in err_str.lower()
-                    or "proactiv" in err_str.lower()
-                    or "Unknown name" in err_str
-                    or "unexpected keyword" in err_str
-                ):
-                    self._enhanced_live = False
-                    self.ui.write_log(
-                        "SYS: Advanced audio features unavailable — reconnecting without them."
-                    )
-                    continue
+                    # Invalid API key — stop hammering the API, prompt re-configuration
+                    if "API key not valid" in err_str or "1007" in err_str:
+                        self.ui.write_log("ERR: API key invalid — please re-enter your key.")
+                        self.ui.set_state("SLEEPING")
+                        self.ui.prompt_reconfig()
+                        while not self.ui._win._ready:
+                            await asyncio.sleep(1)
+                        print("[JARVIS] New API key saved — reconnecting...")
+                        _conn_backoff = 3
+                        continue
 
-                # Invalid API key — stop hammering the API, prompt re-configuration
-                if "API key not valid" in err_str or "1007" in err_str:
-                    self.ui.write_log("ERR: API key invalid — please re-enter your key.")
-                    self.ui.set_state("SLEEPING")
-                    self.ui.prompt_reconfig()
-                    while not self.ui._win._ready:
-                        await asyncio.sleep(1)
-                    print("[JARVIS] New API key saved — reconnecting...")
-                    _conn_backoff = 3
-                    continue
+                    # Network / timeout errors — log clearly and back off
+                    is_net_err = any(k in err_str for k in (
+                        "TimeoutError", "timed out", "getaddrinfo", "CancelledError",
+                        "ConnectionRefusedError", "OSError", "Cannot connect",
+                    ))
+                    if is_net_err:
+                        _conn_backoff = min(getattr(self, "_conn_backoff", 3) * 2, 60)
+                        self._conn_backoff = _conn_backoff
+                        self.ui.write_log(
+                            f"NET: Bağlantı kurulamadı — {_conn_backoff}s sonra tekrar deneniyor. "
+                            "(VPN gerekiyor olabilir)"
+                        )
+                    else:
+                        self._conn_backoff = 3
+                finally:
+                    self.session = None
+                    # Only save if there was a real conversation (≥3 turns)
+                    if len(self._session_log) >= 3:
+                        asyncio.create_task(self._save_session_summary())
 
-                # Network / timeout errors — log clearly and back off
-                is_net_err = any(k in err_str for k in (
-                    "TimeoutError", "timed out", "getaddrinfo", "CancelledError",
-                    "ConnectionRefusedError", "OSError", "Cannot connect",
-                ))
-                if is_net_err:
-                    _conn_backoff = min(getattr(self, "_conn_backoff", 3) * 2, 60)
-                    self._conn_backoff = _conn_backoff
-                    self.ui.write_log(
-                        f"NET: Bağlantı kurulamadı — {_conn_backoff}s sonra tekrar deneniyor. "
-                        "(VPN gerekiyor olabilir)"
-                    )
-                else:
-                    self._conn_backoff = 3
-            finally:
-                self.session = None
-                # Only save if there was a real conversation (≥3 turns)
-                if len(self._session_log) >= 3:
-                    asyncio.create_task(self._save_session_summary())
+                self.set_speaking(False)
+                self.ui.set_state("SLEEPING")
 
-            self.set_speaking(False)
-            self.ui.set_state("SLEEPING")
+                if self._dashboard:
+                    await self._dashboard.broadcast({"type": "status", "state": "sleeping"})
 
-            if self._dashboard:
-                await self._dashboard.broadcast({"type": "status", "state": "sleeping"})
-
-            delay = getattr(self, "_conn_backoff", 3)
-            print(f"[JARVIS] Reconnecting in {delay}s...")
-            await asyncio.sleep(delay)
+                delay = getattr(self, "_conn_backoff", 3)
+                print(f"[JARVIS] Reconnecting in {delay}s...")
+                await asyncio.sleep(delay)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            # GEV lifecycle hook
+            if not self._plugins_stopped_evt.is_set():
+                self._plugins_stopped_evt.set()
+                try:
+                    self._plugin_registry.stop_all(timeout=5.0)
+                except Exception:
+                    pass
 
 def main():
     ui = JarvisUI("face.png")
@@ -2247,13 +2279,35 @@ def main():
     def runner():
         ui.wait_for_api_key()
         jarvis = JarvisLive(ui)
+        # GEV lifecycle hook
+        ui._jarvis = jarvis
         try:
             asyncio.run(jarvis.run())
+        except asyncio.CancelledError:
+            pass
         except KeyboardInterrupt:
             print("\n🔴 Shutting down...")
 
-    threading.Thread(target=runner, daemon=True).start()
-    ui.root.mainloop()
+    # GEV lifecycle hook
+    runner_thread = threading.Thread(target=runner, daemon=True)
+    runner_thread.start()
+    try:
+        ui.root.mainloop()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # GEV lifecycle hook
+        jarvis_live = getattr(ui, "_jarvis", None)
+        if jarvis_live is not None:
+            jarvis_live._shutdown_event.set()
+            loop_ref = getattr(jarvis_live, "_loop", None)
+            task_ref = getattr(jarvis_live, "_main_task", None)
+            if loop_ref is not None and task_ref is not None:
+                try:
+                    loop_ref.call_soon_threadsafe(task_ref.cancel)
+                except RuntimeError:
+                    pass
+        runner_thread.join(timeout=6.0)
 
 if __name__ == "__main__":
     main()

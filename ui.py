@@ -32,6 +32,42 @@ from PyQt6.QtWidgets import (
     QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplitter,
     QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QProgressBar,
 )
+from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineScript
+from PyQt6.QtWebEngineWidgets import QWebEngineView
+
+_GEV_URL = "http://127.0.0.1:4173/?ui=panels"
+_GEV_LAYERS = {
+    "flights": "flights",
+    "vessels": "ais-live-vessels",
+    "satellites": "satellites",
+    "earthquakes": "earthquakes",
+    "fires": "fire-perimeters",
+    "cctv": "cctv",
+}
+_GEV_FOLLOW_KINDS = {
+    "flight": "aircraft",
+    "satellite": "satellite",
+}
+_GEV_MAX_SAFE_JS_INTEGER = 2**53 - 1
+
+
+class _GEVWebEnginePage(QWebEnginePage):
+    def __init__(self, parent, message_handler):
+        super().__init__(parent)
+        self._message_handler = message_handler
+
+    def javaScriptConsoleMessage(self, level, message, line_number, source_id):
+        prefix = "GEV_MSG:"
+        if message and message.startswith(prefix):
+            try:
+                payload = json.loads(message[len(prefix):])
+            except json.JSONDecodeError as exc:
+                print(f"[GEV] Messaggio JavaScript non valido: {exc}", flush=True)
+                return
+            if isinstance(payload, dict):
+                self._message_handler(payload)
+            return
+        super().javaScriptConsoleMessage(level, message, line_number, source_id)
 
 def _base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -2388,10 +2424,31 @@ class MainWindow(QMainWindow):
     _confirm_sig      = pyqtSignal(str, str)   # (title, detail) — irreversible-action gate
     _confirm_hide_sig = pyqtSignal()
     _widget_sig       = pyqtSignal(dict)       # (spec) — generic widget bus, thread-safe
+    _gev_send_sig     = pyqtSignal(str)
 
     def __init__(self, face_path: str):
         super().__init__()
         self._face_path = face_path
+        self._gev_ready_evt = threading.Event()
+        self._gev_load_started = False
+        self._gev_tab_open = False
+        self._gev_previous_content_visible = False
+        self._gev_previous_split_sizes: list[int] = []
+        self._gev_message_dispatch = None
+        self._gev_view_state = {
+            "camera": {
+                "lat": 0,
+                "lon": 0,
+                "altitude_m": 800_000,
+                "heading_deg": 0,
+                "pitch_deg": -90,
+            },
+            "layers": [],
+            "style": None,
+            "map": None,
+            "follow": None,
+            "annotations": [],
+        }
 
         # Load customization from config
         _cfg = _read_full_config()
@@ -2480,10 +2537,45 @@ class MainWindow(QMainWindow):
         )
         _cam_v.addWidget(self._cam_live_lbl, stretch=1)
 
-        # Stack: 0 = animated HUD, 1 = live camera
+        # Stack: 0 = animated HUD, 1 = live camera, 2 = GEV
         self._hud_cam_stack = QStackedWidget()
         self._hud_cam_stack.addWidget(self.hud)
         self._hud_cam_stack.addWidget(_cam_cont)
+
+        self._gev_stack = QStackedWidget()
+        self._gev_placeholder = QLabel("GEV NON CARICATO")
+        self._gev_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._gev_placeholder.setStyleSheet(
+            f"color: {C.TEXT_DIM}; background: #000308; font-family: 'Courier New';"
+        )
+        self._gev_view = QWebEngineView()
+        self._gev_page = _GEVWebEnginePage(self._gev_view, self._on_gev_message)
+        self._gev_view.setPage(self._gev_page)
+        self._gev_view.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self._gev_view.loadFinished.connect(self._on_gev_load_finished)
+        self._gev_stack.addWidget(self._gev_placeholder)
+        self._gev_stack.addWidget(self._gev_view)
+        self._gev_stack.setCurrentWidget(self._gev_placeholder)
+        self._hud_cam_stack.addWidget(self._gev_stack)
+
+        # GEV checks this flag with strict boolean equality during module startup.
+        embed_script = QWebEngineScript()
+        embed_script.setName("jarvis-gev-inline-bridge")
+        embed_script.setInjectionPoint(
+            QWebEngineScript.InjectionPoint.DocumentCreation
+        )
+        embed_script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+        embed_script.setSourceCode(
+            "window.GEV_EMBED_INLINE = true;"
+            "window.addEventListener('message', event => {"
+            " const data = event.data;"
+            " if (data && typeof data.type === 'string' && data.type.startsWith('gev:'))"
+            "  console.log('GEV_MSG:' + JSON.stringify(data));"
+            "});"
+        )
+        self._gev_page.scripts().insert(embed_script)
 
         self._center_split = QSplitter(Qt.Orientation.Vertical)
         self._center_split.setStyleSheet(f"""
@@ -2529,6 +2621,7 @@ class MainWindow(QMainWindow):
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
         self._widget_sig.connect(self._on_widget)
+        self._gev_send_sig.connect(self._on_gev_send)
         # Widget system state
         self._active_widgets: dict[str, QWidget] = {}
         self._toast_timers:   dict[str, QTimer]  = {}
@@ -2635,6 +2728,325 @@ class MainWindow(QMainWindow):
 
     def stop_camera_stream(self) -> None:
         self._cam_stop.set()
+
+    def load_gev(self) -> None:
+        self._hud_cam_stack.setCurrentWidget(self._gev_stack)
+        if self._gev_load_started:
+            return
+        self._gev_load_started = True
+        self._gev_ready_evt.clear()
+        self._gev_placeholder.setText("AVVIO GOD'S EYE VIEW…")
+        self._gev_stack.setCurrentWidget(self._gev_placeholder)
+        self._gev_view.load(QUrl(_GEV_URL))
+
+    def show_gev_tab(self) -> None:
+        """Expand GEV in the center pane and expose its main navigation panels."""
+        if not self._gev_tab_open:
+            self._gev_previous_content_visible = not self._content_panel.isHidden()
+            self._gev_previous_split_sizes = self._center_split.sizes()
+        self._gev_tab_open = True
+        self._content_panel.hide()
+        self.load_gev()
+        self._center_split.setSizes([self._center_split.height(), 0])
+        self._expand_gev_navigation_panels()
+
+    def hide_gev_tab(self) -> None:
+        """Return to Jarvis's HUD while keeping the GEV page loaded."""
+        if not self._gev_tab_open:
+            self._hud_cam_stack.setCurrentWidget(self.hud)
+            return
+        self._gev_tab_open = False
+        self._hud_cam_stack.setCurrentWidget(self.hud)
+        if self._gev_previous_content_visible:
+            self._content_panel.show()
+        else:
+            self._content_panel.hide()
+        if len(self._gev_previous_split_sizes) == 2:
+            self._center_split.setSizes(self._gev_previous_split_sizes)
+        self._gev_previous_split_sizes = []
+
+    def _expand_gev_navigation_panels(self) -> None:
+        if not self._gev_tab_open or not self._gev_ready_evt.is_set():
+            return
+        script = """(() => {
+            const panels = [
+                ['data-panel', `[data-collapse-target="data-panel"]`],
+                ['pp-toggles', `[data-collapse-target="pp-toggles"]`],
+                ['global-context-panel', `[data-collapse-target="global-context-panel"]`],
+            ];
+            const opened = panels.map(([id, toggleSelector]) => {
+                const panel = document.getElementById(id);
+                if (!panel) return {id, expanded: false};
+                if (panel.classList.contains('collapsed')) {
+                    panel.querySelector(toggleSelector)?.click();
+                }
+                return {id, expanded: !panel.classList.contains('collapsed')};
+            });
+            const controls = ['location-bar', 'control-panel'].map(id => {
+                const panel = document.getElementById(id);
+                const toggle = panel?.querySelector(`[data-dock-toggle-target="${id}"]`);
+                return {
+                    id,
+                    available: !!panel && !!toggle && !toggle.disabled &&
+                        getComputedStyle(panel).display !== 'none',
+                };
+            });
+            return [...opened, ...controls];
+        })()"""
+        self._gev_page.runJavaScript(script, self._on_gev_panels_expanded)
+
+    def _on_gev_panels_expanded(self, result) -> None:
+        expected_open = {"data-panel", "pp-toggles", "global-context-panel"}
+        expected_available = {"location-bar", "control-panel"}
+        if isinstance(result, list):
+            opened = {
+                item.get("id")
+                for item in result
+                if isinstance(item, dict) and item.get("expanded") is True
+            }
+            available = {
+                item.get("id")
+                for item in result
+                if isinstance(item, dict) and item.get("available") is True
+            }
+        else:
+            opened = set()
+            available = set()
+        if opened == expected_open and available == expected_available:
+            self._log_sig.emit(
+                "GEV: Data Layers, Display e Context aperti; Location e Visual Presets disponibili"
+            )
+        else:
+            missing = ", ".join(
+                sorted((expected_open - opened) | (expected_available - available))
+            )
+            self._log_sig.emit(
+                f"GEV: controlli richiesti non disponibili ({missing})"
+            )
+
+    def _on_gev_load_finished(self, succeeded: bool) -> None:
+        if succeeded:
+            self._gev_stack.setCurrentWidget(self._gev_view)
+            self._log_sig.emit("GEV: pagina caricata; attendo il segnale ready")
+            return
+        self._gev_load_started = False
+        self._gev_ready_evt.clear()
+        self._gev_placeholder.setText("GEV NON DISPONIBILE — controllare il server")
+        self._gev_stack.setCurrentWidget(self._gev_placeholder)
+        self._log_sig.emit(f"GEV: caricamento fallito da {_GEV_URL}")
+
+    def _on_gev_message(self, message: dict) -> None:
+        message_type = message.get("type")
+        if message_type == "gev:ready":
+            self._gev_ready_evt.set()
+            self._log_sig.emit("GEV: ready")
+            self._expand_gev_navigation_panels()
+        elif message_type == "gev:view-applied" and message.get("ok") is False:
+            self._log_sig.emit(
+                f"GEV: vista non applicata: {message.get('error', message.get('steps', []))}"
+            )
+        elif message_type == "gev:historical-map-applied":
+            if message.get("ok") is False:
+                self._log_sig.emit(
+                    f"GEV: mappa storica non applicata: {message.get('error', 'errore sconosciuto')}"
+                )
+            else:
+                result = message.get("result", {})
+                if not isinstance(result, dict):
+                    result = {}
+                year = result.get("year")
+                requested = result.get("requestedYear")
+                if year is not None:
+                    self._log_sig.emit(
+                        f"GEV: snapshot storico {year} caricato"
+                        + (f" (richiesto {requested})" if requested != year else "")
+                    )
+                elif result.get("playing") is not None:
+                    self._log_sig.emit(
+                        "GEV: riproduzione storica "
+                        + ("avviata" if result["playing"] else "fermata")
+                    )
+                elif result.get("cleared"):
+                    self._log_sig.emit("GEV: overlay storico rimosso")
+        if callable(self._gev_message_dispatch):
+            self._gev_message_dispatch(message)
+
+    def _on_gev_send(self, serialized_message: str) -> None:
+        try:
+            message = json.loads(serialized_message)
+        except json.JSONDecodeError as exc:
+            self._log_sig.emit(f"GEV: messaggio in uscita non valido: {exc}")
+            return
+        if not isinstance(message, dict):
+            self._log_sig.emit("GEV: messaggio in uscita non valido (atteso object)")
+            return
+
+        action = message.get("action")
+        params = message.get("params", {})
+        if action == "open":
+            self.load_gev()
+            return
+        if action == "open_tab":
+            self.show_gev_tab()
+            return
+        if action == "hide_tab":
+            self.hide_gev_tab()
+            return
+        if not self._gev_ready_evt.is_set():
+            self._log_sig.emit(
+                f"GEV: UI non pronta, azione '{action}' non inviata"
+            )
+            return
+
+        if action == "historical_map":
+            historical_message = {
+                "type": "gev:historical-map",
+                "id": f"jarvis-{time.time_ns()}",
+                **params,
+            }
+            encoded_message = json.dumps(
+                historical_message,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            self._gev_page.runJavaScript(
+                f"window.postMessage({encoded_message}, '*');"
+            )
+            return
+
+        if action.startswith("camera_"):
+            camera = self._gev_view_state.get("camera", {})
+            if not isinstance(camera, dict):
+                camera = {}
+            camera = {
+                "lat": camera.get("lat", 0),
+                "lon": camera.get("lon", 0),
+                "altitude_m": camera.get("altitude_m", 800_000),
+                "heading_deg": camera.get("heading_deg", 0),
+                "pitch_deg": camera.get("pitch_deg", -90),
+            }
+
+            if action == "camera_set":
+                for key in ("lat", "lon", "altitude_m", "heading_deg", "pitch_deg"):
+                    if key in params:
+                        camera[key] = params[key]
+            elif action == "camera_zoom":
+                altitude = camera["altitude_m"]
+                level = params.get("level")
+                if level == "in":
+                    camera["altitude_m"] = max(50, altitude / 2)
+                elif level == "out":
+                    camera["altitude_m"] = min(20_000_000, altitude * 2)
+                elif "altitude_m" in params:
+                    camera["altitude_m"] = params["altitude_m"]
+                else:
+                    self._log_sig.emit("GEV: camera_zoom richiede level o altitude_m")
+                    return
+            elif action == "camera_tilt":
+                if "pitch_deg" not in params:
+                    self._log_sig.emit("GEV: camera_tilt richiede pitch_deg")
+                    return
+                camera["pitch_deg"] = params["pitch_deg"]
+            elif action == "camera_rotate":
+                if "heading_deg" not in params:
+                    self._log_sig.emit("GEV: camera_rotate richiede heading_deg")
+                    return
+                camera["heading_deg"] = params["heading_deg"]
+            elif action == "camera_fly":
+                if "lat" not in params or "lon" not in params:
+                    self._log_sig.emit("GEV: camera_fly richiede lat e lon")
+                    return
+                camera["lat"] = params["lat"]
+                camera["lon"] = params["lon"]
+                if "altitude_m" in params:
+                    camera["altitude_m"] = params["altitude_m"]
+            elif action == "camera_reset":
+                camera = {
+                    "lat": 0,
+                    "lon": 0,
+                    "altitude_m": 800_000,
+                    "heading_deg": 0,
+                    "pitch_deg": -90,
+                }
+
+            camera_ranges = {
+                "lat": (-90, 90),
+                "lon": (-180, 180),
+                "altitude_m": (50, 20_000_000),
+                "heading_deg": (0, 360),
+                "pitch_deg": (-90, 0),
+            }
+            for key, (minimum, maximum) in camera_ranges.items():
+                value = camera[key]
+                if (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or not math.isfinite(value)
+                    or not minimum <= value <= maximum
+                ):
+                    self._log_sig.emit(f"GEV: valore camera non valido per {key}")
+                    return
+
+            self._gev_view_state["camera"] = camera
+            self._gev_view_state["follow"] = None
+        elif action == "layer":
+            layer_id = _GEV_LAYERS[params["layer"]]
+            layers = set(self._gev_view_state["layers"])
+            if params["enabled"]:
+                layers.add(layer_id)
+            else:
+                layers.discard(layer_id)
+            self._gev_view_state["layers"] = sorted(layers)
+        elif action == "track":
+            kind = _GEV_FOLLOW_KINDS[params["target_type"]]
+            self._gev_view_state["follow"] = {
+                "kind": kind,
+                "id": params["target_id"],
+            }
+            self._gev_view_state["layers"] = sorted(
+                set(self._gev_view_state["layers"])
+                | {"flights" if kind == "aircraft" else "satellites"}
+            )
+        elif action == "reset":
+            self._gev_view_state.update({
+                "camera": {
+                    "lat": 0,
+                    "lon": 0,
+                    "altitude_m": 800_000,
+                    "heading_deg": 0,
+                    "pitch_deg": -90,
+                },
+                "layers": [],
+                "style": None,
+                "map": None,
+                "follow": None,
+                "annotations": [],
+            })
+        elif action == "annotate":
+            annotations = list(self._gev_view_state["annotations"])
+            annotations.append({
+                "type": "label",
+                "latitude": params["lat"],
+                "longitude": params["lon"],
+                "label": params["text"],
+            })
+            self._gev_view_state["annotations"] = annotations[-24:]
+        else:
+            self._log_sig.emit(f"GEV: azione non supportata '{action}'")
+            return
+
+        view_message = {
+            "type": "gev:view",
+            "id": f"jarvis-{time.time_ns()}",
+            "view": self._gev_view_state,
+        }
+        encoded_message = json.dumps(
+            view_message, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        )
+        self._gev_page.runJavaScript(
+            f"window.postMessage({encoded_message}, '*');"
+        )
 
     # ------------------------------------------------------------------
     # Icon generation — arc-reactor style, rendered with Pillow
@@ -4158,6 +4570,7 @@ class JarvisUI:
         self._app = QApplication.instance() or QApplication(sys.argv)
         self._app.setStyle("Fusion")
         self._win = MainWindow(face_path)
+        self._win._gev_message_dispatch = self._dispatch_gev_message
         self._win.show()
         self.root = _RootShim(self._app)
 
@@ -4248,6 +4661,76 @@ class JarvisUI:
 
     def write_log(self, text: str):
         self._win._log_sig.emit(text)
+
+    def load_gev(self) -> None:
+        self.send_to_gev({"action": "open"})
+
+    def send_to_gev(self, message: dict) -> None:
+        if not isinstance(message, dict):
+            raise TypeError("GEV message must be a dict")
+
+        action = message.get("action")
+        if action not in {
+            "open", "open_tab", "hide_tab", "track", "layer", "reset",
+            "annotate", "historical_map",
+            "camera_set", "camera_fly", "camera_zoom", "camera_tilt",
+            "camera_rotate", "camera_reset",
+        }:
+            raise ValueError(f"Unsupported GEV action: {action}")
+        params = message.get("params", {})
+        if not isinstance(params, dict):
+            raise TypeError("GEV action params must be a dict")
+        if action == "historical_map":
+            command = params.get("command")
+            if command not in {"show", "animate", "stop", "clear"}:
+                raise ValueError(f"Unsupported historical map command: {command}")
+            if command == "show" and (
+                not isinstance(params.get("year"), int)
+                or isinstance(params.get("year"), bool)
+                or abs(params["year"]) > _GEV_MAX_SAFE_JS_INTEGER
+            ):
+                raise ValueError("Historical show command requires an integer year")
+            if command == "animate":
+                for key in ("start_year", "end_year"):
+                    if (
+                        not isinstance(params.get(key), int)
+                        or isinstance(params.get(key), bool)
+                        or abs(params[key]) > _GEV_MAX_SAFE_JS_INTEGER
+                    ):
+                        raise ValueError(f"Historical animate command requires integer {key}")
+                speed = params.get("speed", 3)
+                if (
+                    not isinstance(speed, (int, float))
+                    or isinstance(speed, bool)
+                    or not 0.5 <= speed <= 30
+                    or not math.isfinite(speed)
+                    or params["start_year"] > params["end_year"]
+                ):
+                    raise ValueError("Historical animate command has invalid range or speed")
+        if action == "track" and params.get("target_type") not in _GEV_FOLLOW_KINDS:
+            raise ValueError(
+                f"GEV cannot track target type: {params.get('target_type')}"
+            )
+        if action == "layer" and params.get("layer") not in _GEV_LAYERS:
+            raise ValueError(f"Unsupported GEV layer: {params.get('layer')}")
+        if (
+            action not in {"open", "open_tab", "hide_tab"}
+            and not self._win._gev_ready_evt.is_set()
+        ):
+            raise RuntimeError("GEV interface is not ready")
+
+        serialized = json.dumps(
+            message, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        )
+        self._win._gev_send_sig.emit(serialized)
+
+    def on_gev_message(self, callback) -> None:
+        self._win._gev_message_callback = callback
+
+    def _dispatch_gev_message(self, message: dict) -> None:
+        callback = getattr(self._win, "_gev_message_callback", None)
+        if callable(callback):
+            callback(message)
 
     def wait_for_api_key(self):
         while not self._win._ready:
