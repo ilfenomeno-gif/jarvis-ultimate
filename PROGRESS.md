@@ -40,13 +40,20 @@ HTTP(S); non dichiarata DONE senza evidenza funzionale.
 
 ## M2 — Interazione attiva
 
-Stato: TODO
+Stato: BLOCKED
 Branch: `feat/m02-web-interaction`
-File toccati: nessuno
-Verifica: non iniziata
-Convalida: non iniziata
-Problemi aperti: nessuno oltre alla diagnosi da completare nel ciclo M2.
-Recap: dipende dal browser integrato M1.
+File toccati: `core/browser_interaction.py`,
+`tests/test_browser_interaction.py`, `ui.py`, `main.py`,
+`docs/impl/M02-web-interaction.md`, `PROGRESS.md`
+Verifica: PASS — suite completa 99/99, compileall modificati, Pylance/Problems
+senza errori, `git diff --check` pulito.
+Convalida: PASS parziale per whitelist, JSON escaping, signal Qt e fallback
+quando il dispatch JS fallisce; interazione live Snake/link, fallback quando
+un gioco ignora silenziosamente l'evento e smoke GEV restano BLOCKED.
+Problemi aperti: manca una sessione Jarvis/Gemini utilizzabile; il runtime
+WebEngine live resta bloccato dal crash nativo già rilevato in M1.
+Recap: implementati `press_key`/`click_link` per il browser integrato; non
+dichiarato DONE senza evidenza live.
 
 ## M3 — Screen reader personale
 
@@ -71,5 +78,5 @@ Recap: nessuna implementazione prima di una risposta esplicita.
 
 ## Prossimo passo
 
-Continuare M2 e M3 come cicli distinti. Tornare a M1 per la convalida browser
-live appena l'ambiente Gemini/WebEngine lo consente.
+Procedere con M3 sul branch dedicato; riprendere i criteri live M1/M2 quando
+l'ambiente Gemini/WebEngine lo consente.

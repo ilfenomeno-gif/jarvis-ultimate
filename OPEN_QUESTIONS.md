@@ -46,3 +46,22 @@ implementazione; non registrare segreti nei log.
 
 Stato: BLOCKED; il codice resta committato in branch M1 ma la meccanica non è
 DONE.
+
+## M2 — Convalida interazione browser (bloccante)
+
+- I test automatici verificano whitelist, payload JavaScript JSON-escaped,
+  wrapper signal, schema tools e fallback `QTest` quando il dispatch JavaScript
+  fallisce.
+- Non è stato verificato il comportamento contro una pagina reale: nessuna
+  sessione Jarvis/Gemini era disponibile nel controllo finale; l'uso standalone
+  di Qt/WebEngine ha già mostrato un crash nativo Windows `0xC0000409` nel ciclo
+  M1.
+- Un dispatch JavaScript riuscito non dimostra che un gioco accetti l'evento
+  sintetico (`isTrusted=false`); il fallback Qt scatta solo su fallimento del
+  dispatch, per evitare doppie pressioni non sicure.
+
+**Azione di convalida futura:** con Jarvis e GEV/browser funzionanti, testare
+Snake con freccia su, click su link visibile e pagina che richiede input
+`isTrusted`; verificare che link ambiguo/non trovato non venga cliccato.
+
+Stato: BLOCKED; non serve una scelta per proseguire con M3.
