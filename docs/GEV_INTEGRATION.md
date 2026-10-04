@@ -58,3 +58,14 @@ Su Windows, il processo Vite viene inoltre assegnato a un Job Object con
 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, così il sistema termina il processo
 GEV e i suoi discendenti se il processo Jarvis viene chiuso senza eseguire
 gli hook Python.
+
+## Limiti noti — preambolo Gemini Live
+
+Quando Gemini decide di chiamare il tool `gev`, può emettere un preambolo
+ottimista ("Certamente, signore, sto procedendo...") prima di ricevere
+la risposta del tool. Se il tool fallisce o l'interfaccia non è pronta,
+Gemini si corregge subito dopo. È un comportamento noto di Gemini Live,
+cosmetico, non modificabile senza stravolgere la configurazione del
+modello. Il plugin `gev` garantisce che **la conferma ottimistica
+venga restituita solo dopo un invio riuscito** a `send_to_gev`; il
+preambolo vocale è generato da Gemini indipendentemente da questo.

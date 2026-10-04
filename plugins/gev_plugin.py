@@ -38,9 +38,9 @@ _job_kernel = None
 PLUGIN = {
     "name": "gev",
     "description": (
-        "Interfaccia locale a God's Eye View, un globo 3D con aerei, navi e satelliti. "
-        "Le azioni previste sono open, track, layer, reset e annotate; al momento "
-        "queste azioni non sono ancora implementate."
+        "Controlla God's Eye View, il globo 3D con aerei, navi e satelliti. "
+        "Azioni disponibili: open (apri il globo), track (target_type e target_id), "
+        "layer (layer ed enabled), reset (ripristina la vista), annotate (lat, lon e text)."
     ),
     "parameters": {
         "type": "OBJECT",
@@ -49,7 +49,36 @@ PLUGIN = {
                 "type": "STRING",
                 "description": "Azione GEV prevista: open, track, layer, reset oppure annotate.",
                 "enum": ["open", "track", "layer", "reset", "annotate"],
-            }
+            },
+            "target_type": {
+                "type": "STRING",
+                "description": "Per track: tipo di oggetto da tracciare (flight, vessel, satellite).",
+                "enum": ["flight", "vessel", "satellite"],
+            },
+            "target_id": {
+                "type": "STRING",
+                "description": "Per track: identificativo dell'oggetto da tracciare (es. codice volo, MMSI, NORAD ID).",
+            },
+            "layer": {
+                "type": "STRING",
+                "description": "Per layer: nome del layer da attivare o disattivare (flights, vessels, satellites, earthquakes, fires, cctv, ...).",
+            },
+            "enabled": {
+                "type": "BOOLEAN",
+                "description": "Per layer: true per attivare, false per disattivare.",
+            },
+            "lat": {
+                "type": "NUMBER",
+                "description": "Per annotate: latitudine del punto.",
+            },
+            "lon": {
+                "type": "NUMBER",
+                "description": "Per annotate: longitudine del punto.",
+            },
+            "text": {
+                "type": "STRING",
+                "description": "Per annotate: testo dell'annotazione.",
+            },
         },
         "required": ["action"],
     },
@@ -370,12 +399,107 @@ def stop() -> None:
 
 
 def run(parameters: dict, player=None) -> str:
-    """Placeholder dispatcher; actions are implemented in a later step."""
+    """Validate an action and forward its abstract message to the UI bridge."""
+    if not isinstance(parameters, dict):
+        parameters = {}
+
     action = parameters.get("action", "")
-    message = f"GEV: azione richiesta '{action}' (non ancora implementata)"
-    if player is not None and callable(getattr(player, "write_log", None)):
-        player.write_log(message)
-    return f"L'azione GEV '{action}' non è ancora implementata."
+    if not isinstance(action, str):
+        action = ""
+    action = action.strip()
+
+    write_log = getattr(player, "write_log", None) if player is not None else None
+
+    def log_message(message: str) -> None:
+        if callable(write_log):
+            try:
+                write_log(message)
+                return
+            except Exception:
+                pass
+        _log(message)
+
+    allowed_actions = {"open", "track", "layer", "reset", "annotate"}
+    if action not in allowed_actions:
+        log_message(f"GEV: azione sconosciuta '{action}'")
+        return f"Non riconosco l'azione GEV '{action}', signore."
+
+    params: dict[str, object]
+    if action in {"open", "reset"}:
+        params = {}
+    elif action == "track":
+        target_type = parameters.get("target_type")
+        if not isinstance(target_type, str) or target_type not in {"flight", "vessel", "satellite"}:
+            return "Per tracciare un oggetto mi serve il tipo (flight, vessel o satellite), signore."
+        target_id = parameters.get("target_id")
+        if not isinstance(target_id, str) or not target_id.strip():
+            target_description, missing = {
+                "flight": ("un volo", "il codice"),
+                "vessel": ("una nave", "l'MMSI"),
+                "satellite": ("un satellite", "il NORAD ID"),
+            }[target_type]
+            return f"Per tracciare {target_description} mi serve {missing}, signore."
+        target_id = target_id.strip()
+        params = {"target_type": target_type, "target_id": target_id}
+    elif action == "layer":
+        layer = parameters.get("layer")
+        if not isinstance(layer, str) or not layer.strip():
+            return "Per modificare un layer mi serve il nome del layer, signore."
+        enabled = parameters.get("enabled")
+        if not isinstance(enabled, bool):
+            return "Per il layer mi dica se devo attivarlo o disattivarlo, signore."
+        params = {"layer": layer.strip(), "enabled": enabled}
+    else:
+        lat = parameters.get("lat")
+        lon = parameters.get("lon")
+        if not isinstance(lat, (int, float)) or isinstance(lat, bool) or not -90 <= lat <= 90:
+            return "Per annotare mi serve una latitudine valida, signore."
+        if not isinstance(lon, (int, float)) or isinstance(lon, bool) or not -180 <= lon <= 180:
+            return "Per annotare mi serve una longitudine valida, signore."
+        text = parameters.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return "Per annotare mi serve il testo dell'annotazione, signore."
+        params = {"lat": lat, "lon": lon, "text": text.strip()}
+
+    message = {"action": action, "params": params}
+    send_to_gev = getattr(player, "send_to_gev", None) if player is not None else None
+    if not callable(send_to_gev):
+        log_message(f"GEV: UI non pronta, azione '{action}' non inviata")
+        return (
+            f"Signore, non posso eseguire l'azione GEV '{action}': "
+            "l'interfaccia non è ancora pronta."
+        )
+
+    try:
+        send_to_gev(message)
+    except Exception as exc:
+        log_message(f"GEV: invio fallito per '{action}': {exc}")
+        return f"Signore, l'invio dell'azione GEV '{action}' è fallito: {exc}"
+
+    details = ""
+    if action == "track":
+        details = f" (target_type={params['target_type']}, target_id={params['target_id']})"
+    elif action == "layer":
+        details = f" (layer={params['layer']}, enabled={params['enabled']})"
+    elif action == "annotate":
+        details = f" (lat={params['lat']}, lon={params['lon']})"
+    log_message(f"GEV: invio azione '{action}'{details}")
+
+    if action == "open":
+        return "Apro God's Eye View, signore."
+    if action == "track":
+        target_name = {
+            "flight": "il volo",
+            "vessel": "la nave",
+            "satellite": "il satellite",
+        }[params["target_type"]]
+        return f"Traccio {target_name} {params['target_id']}, signore."
+    if action == "layer":
+        verb = "Attivo" if params["enabled"] else "Disattivo"
+        return f"{verb} il layer {params['layer']}, signore."
+    if action == "reset":
+        return "Resetto la vista di God's Eye View, signore."
+    return f"Aggiungo un'annotazione a ({params['lat']}, {params['lon']}), signore."
 
 
 # GEV lifecycle hook
