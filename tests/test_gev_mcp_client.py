@@ -364,6 +364,35 @@ def test_camera_actions_are_advertised_in_plugin_schema():
     }.issubset(properties)
 
 
+def test_gev_tab_actions_are_advertised_and_forwarded():
+    properties = gev_plugin.PLUGIN["parameters"]["properties"]
+    assert {"open_tab", "hide_tab"}.issubset(properties["action"]["enum"])
+    sent = []
+
+    class Player:
+        def send_to_gev(self, message):
+            sent.append(message)
+
+    assert gev_plugin.run(
+        {"action": "open_tab"}, player=Player()
+    ) == "Apro la scheda God's Eye View con i pannelli visibili, signore."
+    assert gev_plugin.run(
+        {"action": "hide_tab"}, player=Player()
+    ) == "Torno alla schermata Jarvis; God's Eye View resta aperto, signore."
+    assert sent == [
+        {"action": "open_tab", "params": {}},
+        {"action": "hide_tab", "params": {}},
+    ]
+
+
+def test_gev_embed_url_selects_panels_ui():
+    from PyQt6.QtCore import QUrl
+
+    from ui import _GEV_URL
+
+    assert QUrl(_GEV_URL).query() == "ui=panels"
+
+
 @pytest.mark.parametrize(
     ("parameters", "expected_response", "expected_params"),
     [

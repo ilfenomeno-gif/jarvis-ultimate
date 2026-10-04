@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineScript
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
-_GEV_URL = "http://127.0.0.1:4173/"
+_GEV_URL = "http://127.0.0.1:4173/?ui=panels"
 _GEV_LAYERS = {
     "flights": "flights",
     "vessels": "ais-live-vessels",
@@ -2431,6 +2431,9 @@ class MainWindow(QMainWindow):
         self._face_path = face_path
         self._gev_ready_evt = threading.Event()
         self._gev_load_started = False
+        self._gev_tab_open = False
+        self._gev_previous_content_visible = False
+        self._gev_previous_split_sizes: list[int] = []
         self._gev_message_dispatch = None
         self._gev_view_state = {
             "camera": {
@@ -2736,6 +2739,91 @@ class MainWindow(QMainWindow):
         self._gev_stack.setCurrentWidget(self._gev_placeholder)
         self._gev_view.load(QUrl(_GEV_URL))
 
+    def show_gev_tab(self) -> None:
+        """Expand GEV in the center pane and expose its main navigation panels."""
+        if not self._gev_tab_open:
+            self._gev_previous_content_visible = not self._content_panel.isHidden()
+            self._gev_previous_split_sizes = self._center_split.sizes()
+        self._gev_tab_open = True
+        self._content_panel.hide()
+        self.load_gev()
+        self._center_split.setSizes([self._center_split.height(), 0])
+        self._expand_gev_navigation_panels()
+
+    def hide_gev_tab(self) -> None:
+        """Return to Jarvis's HUD while keeping the GEV page loaded."""
+        if not self._gev_tab_open:
+            self._hud_cam_stack.setCurrentWidget(self.hud)
+            return
+        self._gev_tab_open = False
+        self._hud_cam_stack.setCurrentWidget(self.hud)
+        if self._gev_previous_content_visible:
+            self._content_panel.show()
+        else:
+            self._content_panel.hide()
+        if len(self._gev_previous_split_sizes) == 2:
+            self._center_split.setSizes(self._gev_previous_split_sizes)
+        self._gev_previous_split_sizes = []
+
+    def _expand_gev_navigation_panels(self) -> None:
+        if not self._gev_tab_open or not self._gev_ready_evt.is_set():
+            return
+        script = """(() => {
+            const panels = [
+                ['data-panel', `[data-collapse-target="data-panel"]`],
+                ['pp-toggles', `[data-collapse-target="pp-toggles"]`],
+                ['global-context-panel', `[data-collapse-target="global-context-panel"]`],
+            ];
+            const opened = panels.map(([id, toggleSelector]) => {
+                const panel = document.getElementById(id);
+                if (!panel) return {id, expanded: false};
+                if (panel.classList.contains('collapsed')) {
+                    panel.querySelector(toggleSelector)?.click();
+                }
+                return {id, expanded: !panel.classList.contains('collapsed')};
+            });
+            const controls = ['location-bar', 'control-panel'].map(id => {
+                const panel = document.getElementById(id);
+                const toggle = panel?.querySelector(`[data-dock-toggle-target="${id}"]`);
+                return {
+                    id,
+                    available: !!panel && !!toggle && !toggle.disabled &&
+                        getComputedStyle(panel).display !== 'none',
+                };
+            });
+            return [...opened, ...controls];
+        })()"""
+        self._gev_page.runJavaScript(script, self._on_gev_panels_expanded)
+
+    def _on_gev_panels_expanded(self, result) -> None:
+        expected_open = {"data-panel", "pp-toggles", "global-context-panel"}
+        expected_available = {"location-bar", "control-panel"}
+        if isinstance(result, list):
+            opened = {
+                item.get("id")
+                for item in result
+                if isinstance(item, dict) and item.get("expanded") is True
+            }
+            available = {
+                item.get("id")
+                for item in result
+                if isinstance(item, dict) and item.get("available") is True
+            }
+        else:
+            opened = set()
+            available = set()
+        if opened == expected_open and available == expected_available:
+            self._log_sig.emit(
+                "GEV: Data Layers, Display e Context aperti; Location e Visual Presets disponibili"
+            )
+        else:
+            missing = ", ".join(
+                sorted((expected_open - opened) | (expected_available - available))
+            )
+            self._log_sig.emit(
+                f"GEV: controlli richiesti non disponibili ({missing})"
+            )
+
     def _on_gev_load_finished(self, succeeded: bool) -> None:
         if succeeded:
             self._gev_stack.setCurrentWidget(self._gev_view)
@@ -2752,6 +2840,7 @@ class MainWindow(QMainWindow):
         if message_type == "gev:ready":
             self._gev_ready_evt.set()
             self._log_sig.emit("GEV: ready")
+            self._expand_gev_navigation_panels()
         elif message_type == "gev:view-applied" and message.get("ok") is False:
             self._log_sig.emit(
                 f"GEV: vista non applicata: {message.get('error', message.get('steps', []))}"
@@ -2796,6 +2885,12 @@ class MainWindow(QMainWindow):
         params = message.get("params", {})
         if action == "open":
             self.load_gev()
+            return
+        if action == "open_tab":
+            self.show_gev_tab()
+            return
+        if action == "hide_tab":
+            self.hide_gev_tab()
             return
         if not self._gev_ready_evt.is_set():
             self._log_sig.emit(
@@ -4576,7 +4671,8 @@ class JarvisUI:
 
         action = message.get("action")
         if action not in {
-            "open", "track", "layer", "reset", "annotate", "historical_map",
+            "open", "open_tab", "hide_tab", "track", "layer", "reset",
+            "annotate", "historical_map",
             "camera_set", "camera_fly", "camera_zoom", "camera_tilt",
             "camera_rotate", "camera_reset",
         }:
@@ -4617,7 +4713,10 @@ class JarvisUI:
             )
         if action == "layer" and params.get("layer") not in _GEV_LAYERS:
             raise ValueError(f"Unsupported GEV layer: {params.get('layer')}")
-        if action != "open" and not self._win._gev_ready_evt.is_set():
+        if (
+            action not in {"open", "open_tab", "hide_tab"}
+            and not self._win._gev_ready_evt.is_set()
+        ):
             raise RuntimeError("GEV interface is not ready")
 
         serialized = json.dumps(

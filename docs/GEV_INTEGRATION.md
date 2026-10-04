@@ -77,22 +77,39 @@ preambolo vocale è generato da Gemini indipendentemente da questo.
 - `MainWindow` ospita una `QWebEngineView` in una pagina dedicata dello
   stack centrale; prima del caricamento mostra un placeholder
   (`../ui.py:2536-2557`).
-- L'apertura carica `http://127.0.0.1:4173/` solo su richiesta. La signal
+- `open` carica `http://127.0.0.1:4173/` solo su richiesta. `open_tab`
+  mostra la vista GEV nell'area centrale ampliata, nasconde temporaneamente
+  il pannello contenuti inferiore e apre i pannelli GEV `data-panel` e
+  `global-context-panel` quando la pagina segnala `gev:ready`. `hide_tab`
+  torna all'HUD e ripristina visibilità e dimensioni precedenti senza
+  scaricare GEV.
+- La signal
   Qt `_gev_send_sig` inoltra i messaggi al thread della UI;
   `JarvisUI.send_to_gev()` valida e serializza il payload
-  (`../ui.py:2427`, `../ui.py:2621`, `../ui.py:2729-2748`,
-  `../ui.py:4498-4549`).
+  (`../ui.py:2427`, `../ui.py:2624`, `../ui.py:2732-2779`,
+  `../ui.py:4668-4725`).
 - Prima del caricamento viene registrato uno script `MainWorld` a
   `DocumentCreation`: imposta `window.GEV_EMBED_INLINE = true` e inoltra
   alla console i messaggi `gev:*` (`../ui.py:2560-2575`). GEV riconosce
   questa modalità tramite un confronto booleano stretto
   (`C:\Users\PC\Downloads\gods-eye-view-main\_gev-clone\src\app\embed.js:36-46`).
+- Jarvis carica la pagina con `?ui=panels`: GEV mostra Data Layers, Display,
+  Location e Visual Presets, rimuove la maschera circolare e mantiene nascosti
+  il dock vocale e POWER UP. Il bridge `gev:*` continua a dipendere
+  separatamente da `GEV_EMBED_INLINE`; senza un parametro `ui`, l'embed resta
+  nella modalità `globe` precedente. `ui=full` mostra invece l'interfaccia
+  standalone completa.
+- Nella prova live la viewport QWebEngine era 492×624 px CSS a DPR 2. In questa
+  finestra Data Layers e Context sono limitati rispettivamente a 280 e 290 px;
+  il rail Context scorre verticalmente. Location e Visual Presets condividono
+  il dock a due colonne e aprono popover esclusivi, mantenuti dentro la
+  viewport.
 - Il dispatcher traduce le azioni in messaggi completi `gev:view`.
   Le risposte `gev:ready` e `gev:view-applied` vengono decodificate
   dall'override `javaScriptConsoleMessage`, passano per
   `MainWindow._on_gev_message()` e possono essere inoltrate al callback
   registrato con `JarvisUI.on_gev_message()`
-  (`../ui.py:54-69`, `../ui.py:2750-2783`, `../ui.py:4551-4557`).
+  (`../ui.py:54-69`, `../ui.py:2838-2872`, `../ui.py:4573`, `../ui.py:4727`).
 - Il protocollo del checkout GEV definisce `gev:view`,
   `gev:view-applied` e `gev:ready`; in modalità inline mittente e
   destinatario sono la stessa finestra
@@ -104,7 +121,7 @@ preambolo vocale è generato da Gemini indipendentemente da questo.
   `C:\Users\PC\Downloads\gods-eye-view-main\_gev-clone\src\view\index.js:30-50`);
   la UI Jarvis accetta solo `flight` e `satellite`, perciò il tipo `vessel`
   dichiarato dal plugin non è inoltrabile e produce un errore esplicito
-  (`../ui.py:4537-4543`).
+  (`../ui.py:4710-4714`).
 
 ### Verifiche eseguite
 
@@ -128,7 +145,7 @@ preambolo vocale è generato da Gemini indipendentemente da questo.
 - `send_to_gev()` accoda la signal Qt e non attende `gev:view-applied`.
   La risposta ottimistica del plugin indica quindi che l'invio alla UI è
   stato accettato, non che GEV abbia completato l'azione
-  (`../ui.py:4549`, `../plugins/gev_plugin.py:682`). Il callback di
+  (`../ui.py:4725`, `../plugins/gev_plugin.py:682`). Il callback di
   risposta è predisposto per la gestione successiva.
 - Sul desktop Windows non era presente un collegamento J.A.R.V.I.S.
   È stato creato `C:\Users\PC\Desktop\J.A.R.V.I.S.lnk`, puntato al
@@ -146,7 +163,7 @@ preambolo vocale è generato da Gemini indipendentemente da questo.
   il comando vocale effettivo con Gemini Live rimane non verificato.
 - Un segnale `gev:ready` non ricevuto lascia la UI non pronta per le
   azioni diverse da `open`; il timeout di attesa non è implementato
-  (`../ui.py:2732-2743`, `:2750-2754`, `:2776-2780`).
+  (`../ui.py:2732-2750`, `:2838-2844`, `:4668-4725`).
 - Il layer satelliti, il test vocale con microfono e la chiusura mediante
   Ctrl+C con verifica della porta/processi **non sono stati verificati**
   durante quella prova. Il suo stato dei processi non costituisce una verifica

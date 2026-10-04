@@ -19,11 +19,17 @@ lo stesso tool.
 **Importante:** “non funzionante in Jarvis” non significa che il codice GEV sia
 guasto. Jarvis espone solo una parte delle azioni GEV.
 
+**Limite dell'embed a pannelli:** le modifiche fatte con il mouse nei pannelli
+GEV non vengono sincronizzate nello stato conservato da Jarvis. Un successivo
+`reset` inviato da Jarvis può quindi sovrascrivere layer o altre impostazioni
+scelte nell'interfaccia GEV.
+
 ## Sintesi dell'integrazione
 
 | Nome | Descrizione | Comando Jarvis suggerito | Verifica e stato |
 |---|---|---|---|
 | Apertura GEV | Avvia/carica il globo nella finestra integrata. | “Jarvis, apri God's Eye View.” | **Funzionante** — UI testuale ha restituito `gev:ready` in una prova manuale. |
+| Scheda GEV ampia | Mostra il globo nell'area centrale ampliata di Jarvis con `DATA LAYERS`, `DISPLAY`, `LOCATION` e `VISUAL PRESETS` utilizzabili. Il contesto resta disponibile; Location e Visual Presets sono schede inferiori che si aprono una alla volta. Voce GEV e POWER UP sono nascosti, e la maschera circolare non viene disegnata. | “Jarvis, apri la scheda di God's Eye View con tutti i menu.” Per tornare: “Jarvis, chiudi la scheda GEV.” | **Convalidato live in QWebEngine** — `open_tab` ha caricato `?ui=panels`, ricevuto `gev:ready` ed espanso Data Layers, Display e Context; disclosure e preset rispondono ai click, ricerca Location visibile e tray inferiori esclusivi. La viewport provata era 492×624 px CSS a DPR 2: Data Layers 280 px, Context 290 px con scroll verticale. Maschera, voce GEV e POWER UP assenti. Evidenze: [Data Layers + Display](../../../GEV-Jarvis-Project/impl/25-gev-panels-display.png) e [Data Layers + Context](../../../GEV-Jarvis-Project/impl/25-gev-panels-context.png). Verifiche non incluse: attivazione di un layer con provider esterno e prova microfono. `hide_tab` ripristina schermata e dimensione. |
 | Vista verso un luogo (fly-to) | Cerca l'area e prepara una vista centrata sul luogo attraverso il tool MCP nativo GEV. | “Jarvis, vai a Roma.” | **Funzionante lato dispatch** — prova testuale ha chiamato `show_in_gods_eye_view`; il log MCP lo conferma. Il fly-to non è un'azione del plugin `gev`; il rendering/camera non è stato verificato visivamente in quest'ultimo test. |
 | Zoom incrementale | Dimezza o raddoppia l'altitudine della camera corrente. | “Jarvis, zoomma dentro.” / “Zoomma fuori.” | **Funzionante (testuale; screenshot live acquisito)** — dopo `GEV: ready`, la UI ha dispatchato `camera_zoom` per `in` e `out`; test automatici: 25 passati. Screenshot in `C:\Users\PC\Downloads\GEV-Jarvis-Project\impl\01-zoom-visivo.png`; revisione personale richiesta ancora aperta. Il microfono non è stato provato. |
 | Inclinazione camera | Imposta `pitch_deg` nell'intervallo -90..0. | “Jarvis, inclina lo sguardo verso il basso.” | **Funzionante (testuale; screenshot live acquisito)** — log UI: `camera_tilt`, `pitch_deg=-45`. Screenshot in `C:\Users\PC\Downloads\GEV-Jarvis-Project\impl\02-tilt-visivo.png`; revisione personale richiesta ancora aperta. Il microfono non è stato provato. |

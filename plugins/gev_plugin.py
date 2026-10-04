@@ -50,7 +50,10 @@ PLUGIN = {
     "name": "gev",
     "description": (
         "Controlla God's Eye View, il globo 3D con aerei, navi e satelliti. "
-        "Azioni disponibili: open (apri il globo), track (target_type e target_id), "
+        "Azioni disponibili: open (apri il globo), open_tab (mostra la scheda GEV "
+        "a schermo ampio con i pannelli Data Layers e Context aperti), "
+        "hide_tab (chiudi la scheda visuale e torna a Jarvis), "
+        "track (target_type e target_id), "
         "layer (layer ed enabled), reset (ripristina la vista), annotate (lat, lon e text), "
         "historical_map (mostra o anima confini storici disponibili). "
         "historical_scenario, historical_factions, historical_events e "
@@ -63,12 +66,15 @@ PLUGIN = {
             "action": {
                 "type": "STRING",
                 "description": (
-                    "Azione GEV: open, track, layer, reset, annotate, camera "
+                    "Azione GEV: open, open_tab (mostra il globo ampio con i pannelli "
+                    "Data Layers e Context aperti), hide_tab (chiudi la scheda "
+                    "visuale e torna a Jarvis), track, layer, reset, annotate, camera "
                     "incrementale (zoom, tilt, rotate, reset_camera) e comandi "
                     "historical_*. Per 'vai a X' usa show_in_gods_eye_view."
                 ),
                 "enum": [
-                    "open", "track", "layer", "reset", "annotate", "historical_map",
+                    "open", "open_tab", "hide_tab", "track", "layer", "reset",
+                    "annotate", "historical_map",
                     "historical_scenario", "historical_factions",
                     "historical_events", "historical_years", "zoom", "tilt",
                     "rotate", "reset_camera",
@@ -641,7 +647,8 @@ def run(parameters: dict, player=None) -> str:
         _log(message)
 
     allowed_actions = {
-        "open", "track", "layer", "reset", "annotate", "historical_map",
+        "open", "open_tab", "hide_tab", "track", "layer", "reset", "annotate",
+        "historical_map",
         "historical_scenario", "historical_factions",
         "historical_events", "historical_years", "zoom", "tilt", "rotate",
         "reset_camera",
@@ -652,7 +659,7 @@ def run(parameters: dict, player=None) -> str:
 
     params: dict[str, object]
     camera_response: str | None = None
-    if action in {"open", "reset", "historical_years"}:
+    if action in {"open", "open_tab", "hide_tab", "reset", "historical_years"}:
         params = {}
     elif action == "historical_scenario":
         name = parameters.get("name")
@@ -910,6 +917,10 @@ def run(parameters: dict, player=None) -> str:
         return camera_response
     if action == "open":
         return "Apro God's Eye View, signore."
+    if action == "open_tab":
+        return "Apro la scheda God's Eye View con i pannelli visibili, signore."
+    if action == "hide_tab":
+        return "Torno alla schermata Jarvis; God's Eye View resta aperto, signore."
     if action == "track":
         target_name = {
             "flight": "il volo",
