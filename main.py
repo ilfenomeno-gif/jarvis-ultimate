@@ -219,6 +219,41 @@ TOOL_DECLARATIONS = [
         },
     },
     {
+        "name": "press_key",
+        "description": (
+            "Press one allowed key in Jarvis's integrated browser page. "
+            "Allowed: A-Z, arrow keys, Space, Enter and Escape. "
+            "Use this for controls in the currently open web page."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "key": {
+                    "type": "STRING",
+                    "description": "One key: A-Z, ArrowUp/Down/Left/Right, Space, Enter or Escape.",
+                },
+            },
+            "required": ["key"],
+        },
+    },
+    {
+        "name": "click_link",
+        "description": (
+            "Clicks a visible link in Jarvis's integrated browser by its displayed "
+            "text. If the text is ambiguous, no link is clicked."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "link_text": {
+                    "type": "STRING",
+                    "description": "The visible text of the link to click.",
+                },
+            },
+            "required": ["link_text"],
+        },
+    },
+    {
         "name": "web_search",
         "description": (
             "Searches the web. Use for ANY question about current facts, events, prices, "
@@ -1268,6 +1303,14 @@ class JarvisLive:
             elif name == "open_website":
                 self.ui.open_url_in_webview(args.get("url"))
                 result = "Opening the website inside Jarvis."
+
+            elif name == "press_key":
+                key = self.ui.press_key_in_webview(args.get("key"))
+                result = f"Requested a {key} key press in the integrated browser."
+
+            elif name == "click_link":
+                link_text = self.ui.click_link_in_webview(args.get("link_text"))
+                result = f"Requested click on the visible link '{link_text}'."
 
             elif name == "weather_report":
                 r = await loop.run_in_executor(None, lambda: weather_action(parameters=args, player=self.ui))

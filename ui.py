@@ -32,8 +32,13 @@ from PyQt6.QtWidgets import (
     QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplitter,
     QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QProgressBar,
 )
+from PyQt6.QtTest import QTest
 from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineScript
 from PyQt6.QtWebEngineWidgets import QWebEngineView
+from core.browser_interaction import (
+    build_click_link_script, build_keyboard_event_script,
+    normalize_link_text, normalize_web_key,
+)
 from core.browser_url import is_allowed_http_scheme, normalize_http_url
 
 _GEV_URL = "http://127.0.0.1:4173/?ui=panels"
@@ -2440,6 +2445,8 @@ class MainWindow(QMainWindow):
     _gev_send_sig     = pyqtSignal(str)
     _browser_open_sig = pyqtSignal(str)
     _browser_close_sig = pyqtSignal()
+    _browser_key_sig = pyqtSignal(str)
+    _browser_click_sig = pyqtSignal(str)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -2646,6 +2653,8 @@ class MainWindow(QMainWindow):
         self._gev_send_sig.connect(self._on_gev_send)
         self._browser_open_sig.connect(self._open_url_in_webview)
         self._browser_close_sig.connect(self.close_browser)
+        self._browser_key_sig.connect(self._press_key_in_webview)
+        self._browser_click_sig.connect(self._click_link_in_webview)
         # Widget system state
         self._active_widgets: dict[str, QWidget] = {}
         self._toast_timers:   dict[str, QTimer]  = {}
@@ -2890,6 +2899,76 @@ class MainWindow(QMainWindow):
     def _on_browser_navigation_blocked(self) -> None:
         self._browser_status.setText("Blocked non-HTTP(S) navigation")
         self._log_sig.emit("Browser: navigazione non HTTP(S) bloccata")
+
+    def _press_key_in_webview(self, key: str) -> None:
+        if self._main_content_stack.currentWidget() is not self._browser_panel:
+            self._log_sig.emit("Browser: impossibile premere un tasto, pagina non attiva")
+            return
+        self._browser_view.setFocus()
+        try:
+            script = build_keyboard_event_script(key)
+            self._browser_page.runJavaScript(
+                script,
+                lambda dispatched: self._browser_key_dispatch_finished(
+                    key, dispatched
+                ),
+            )
+        except (TypeError, ValueError, RuntimeError) as exc:
+            self._log_sig.emit(f"Browser: dispatch tasto non riuscito: {exc}")
+            self._browser_native_key_fallback(key)
+
+    def _browser_key_dispatch_finished(self, key: str, dispatched: object) -> None:
+        if dispatched is True:
+            self._log_sig.emit(f"Browser: KeyboardEvent {key} dispatch completato")
+            return
+        self._log_sig.emit(
+            f"Browser: dispatch JavaScript {key} non riuscito; uso fallback Qt"
+        )
+        self._browser_native_key_fallback(key)
+
+    def _browser_native_key_fallback(self, key: str) -> None:
+        qt_keys = {
+            "ArrowUp": Qt.Key.Key_Up,
+            "ArrowDown": Qt.Key.Key_Down,
+            "ArrowLeft": Qt.Key.Key_Left,
+            "ArrowRight": Qt.Key.Key_Right,
+            " ": Qt.Key.Key_Space,
+            "Enter": Qt.Key.Key_Return,
+            "Escape": Qt.Key.Key_Escape,
+        }
+        qt_key = qt_keys.get(key)
+        if qt_key is None and len(key) == 1 and key.isascii() and key.isalpha():
+            qt_key = Qt.Key(ord(key.upper()))
+        if qt_key is None:
+            self._log_sig.emit(f"Browser: fallback Qt non disponibile per {key}")
+            return
+        self._browser_view.setFocus()
+        QTest.keyClick(self._browser_view, qt_key)
+        self._log_sig.emit(f"Browser: fallback Qt eseguito per {key}")
+
+    def _click_link_in_webview(self, link_text: str) -> None:
+        if self._main_content_stack.currentWidget() is not self._browser_panel:
+            self._log_sig.emit("Browser: impossibile cliccare, pagina non attiva")
+            return
+        try:
+            script = build_click_link_script(link_text)
+            self._browser_page.runJavaScript(
+                script,
+                self._browser_link_click_finished,
+            )
+        except (TypeError, ValueError, RuntimeError) as exc:
+            self._log_sig.emit(f"Browser: click link non riuscito: {exc}")
+
+    def _browser_link_click_finished(self, result: object) -> None:
+        if not isinstance(result, dict):
+            self._log_sig.emit("Browser: la pagina non ha restituito l'esito del click")
+            return
+        if result.get("ok") is True:
+            self._log_sig.emit("Browser: link cliccato")
+        elif result.get("reason") == "ambiguous":
+            self._log_sig.emit("Browser: testo link ambiguo; nessun link cliccato")
+        else:
+            self._log_sig.emit("Browser: link visibile non trovato")
 
     def _update_browser_navigation(self, _url: QUrl | None = None) -> None:
         self._browser_back_button.setEnabled(self._browser_view.history().canGoBack())
@@ -4817,6 +4896,16 @@ class JarvisUI:
         normalized_url = normalize_http_url(url)
         self._win._browser_open_sig.emit(normalized_url)
         return normalized_url
+
+    def press_key_in_webview(self, key: str) -> str:
+        normalized_key = normalize_web_key(key)
+        self._win._browser_key_sig.emit(normalized_key)
+        return normalized_key
+
+    def click_link_in_webview(self, link_text: str) -> str:
+        normalized_text = normalize_link_text(link_text)
+        self._win._browser_click_sig.emit(normalized_text)
+        return normalized_text
 
     def close_webview(self) -> None:
         self._win._browser_close_sig.emit()
