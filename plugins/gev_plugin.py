@@ -1,12 +1,10 @@
-"""Lifecycle bridge for a local God's Eye View checkout.
-
-The GEV actions are intentionally placeholders in this first integration step.
-"""
+"""Lifecycle and MCP bridge for a local God's Eye View checkout."""
 
 from __future__ import annotations
 
 import atexit
 from collections import deque
+import math
 import os
 from pathlib import Path
 import socket
@@ -16,6 +14,13 @@ import time
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from plugins._gev_mcp_client import (
+    McpClientError,
+    McpStdioClient,
+    to_gemini_schema,
+    tool_result_text,
+)
+
 GEV_DIR = Path(__file__).resolve().parents[3] / "gods-eye-view-main" / "_gev-clone"
 GEV_PORT = 4173
 GEV_NODE_DIR = GEV_DIR / ".node"
@@ -24,6 +29,7 @@ STARTUP_TIMEOUT_SEC = 60
 INSTALL_TIMEOUT_SEC = 600
 STOP_TIMEOUT_SEC = 5
 GEV_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "gev.log"
+_MAX_SAFE_JS_INTEGER = 2**53 - 1
 
 _process: subprocess.Popen[str] | None = None
 _process_lock = threading.Lock()
@@ -34,26 +40,31 @@ _output_lock = threading.Lock()
 _output_reader: threading.Thread | None = None
 _job_handle = None
 _job_kernel = None
+_mcp_client: McpStdioClient | None = None
+_mcp_start_error: str | None = None
+_startup_finished = threading.Event()
 
 PLUGIN = {
     "name": "gev",
     "description": (
         "Controlla God's Eye View, il globo 3D con aerei, navi e satelliti. "
         "Azioni disponibili: open (apri il globo), track (target_type e target_id), "
-        "layer (layer ed enabled), reset (ripristina la vista), annotate (lat, lon e text)."
+        "layer (layer ed enabled), reset (ripristina la vista), annotate (lat, lon e text), "
+        "historical_map (mostra o anima confini storici disponibili). "
+        "Per ricerche, rotte e altri strumenti usa le funzioni MCP gev_mcp_*."
     ),
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "Azione GEV prevista: open, track, layer, reset oppure annotate.",
-                "enum": ["open", "track", "layer", "reset", "annotate"],
+                "description": "Azione GEV prevista: open, track, layer, reset, annotate oppure historical_map.",
+                "enum": ["open", "track", "layer", "reset", "annotate", "historical_map"],
             },
             "target_type": {
                 "type": "STRING",
-                "description": "Per track: tipo di oggetto da tracciare (flight, vessel, satellite).",
-                "enum": ["flight", "vessel", "satellite"],
+                "description": "Per track: tipo di oggetto tracciabile (flight o satellite).",
+                "enum": ["flight", "satellite"],
             },
             "target_id": {
                 "type": "STRING",
@@ -78,6 +89,27 @@ PLUGIN = {
             "text": {
                 "type": "STRING",
                 "description": "Per annotate: testo dell'annotazione.",
+            },
+            "command": {
+                "type": "STRING",
+                "description": "Per historical_map: show, animate, stop oppure clear.",
+                "enum": ["show", "animate", "stop", "clear"],
+            },
+            "year": {
+                "type": "INTEGER",
+                "description": "Per historical_map show: anno richiesto; verrà scelto lo snapshot disponibile più vicino.",
+            },
+            "start_year": {
+                "type": "INTEGER",
+                "description": "Per historical_map animate: anno iniziale richiesto.",
+            },
+            "end_year": {
+                "type": "INTEGER",
+                "description": "Per historical_map animate: anno finale richiesto.",
+            },
+            "speed": {
+                "type": "NUMBER",
+                "description": "Per animate: secondi per snapshot (da 0.5 a 30).",
             },
         },
         "required": ["action"],
@@ -257,6 +289,23 @@ def _attach_kill_on_close_job(process: subprocess.Popen[str]) -> None:
     _job_kernel = kernel
 
 
+def _attach_to_existing_job(process: subprocess.Popen[str]) -> None:
+    """Keep the MCP Node child in the same kill-on-close job as Vite."""
+    if os.name != "nt" or _job_handle is None or _job_kernel is None:
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    _job_kernel.AssignProcessToJobObject.argtypes = [
+        wintypes.HANDLE,
+        wintypes.HANDLE,
+    ]
+    _job_kernel.AssignProcessToJobObject.restype = wintypes.BOOL
+    process_handle = wintypes.HANDLE(int(process._handle))
+    if not _job_kernel.AssignProcessToJobObject(_job_handle, process_handle):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
 def _close_job_handle() -> None:
     global _job_handle, _job_kernel
     if _job_handle is not None and _job_kernel is not None:
@@ -267,8 +316,16 @@ def _close_job_handle() -> None:
 
 # GEV lifecycle hook
 def start() -> None:
+    _startup_finished.clear()
+    try:
+        _start_runtime()
+    finally:
+        _startup_finished.set()
+
+
+def _start_runtime() -> None:
     """Install GEV dependencies if needed and start its local Vite server."""
-    global _output_reader, _process, _started
+    global _output_reader, _process, _started, _mcp_client, _mcp_start_error
 
     with _process_lock:
         if _started:
@@ -370,15 +427,40 @@ def start() -> None:
             raise
 
         _started = True
+        _mcp_start_error = None
+        mcp_cli = GEV_DIR / "server" / "mcp" / "stdio.js"
+        if not mcp_cli.is_file():
+            _mcp_start_error = f"GEV MCP entrypoint not found: {mcp_cli}"
+            _log(f"GEV MCP: avvio non riuscito: {_mcp_start_error}")
+        else:
+            try:
+                mcp_client = McpStdioClient(
+                    [node_exe, str(mcp_cli), "--api-base", GEV_HEALTH_URL],
+                    GEV_DIR,
+                    _log,
+                    process_started=_attach_to_existing_job,
+                )
+                mcp_client.start()
+                _mcp_client = mcp_client
+            except Exception as exc:
+                _mcp_start_error = str(exc)
+                _log(f"GEV MCP: avvio non riuscito: {_mcp_start_error}")
         _log(f"GEV: pronto su {GEV_HEALTH_URL}")
 
 
 # GEV lifecycle hook
 def stop() -> None:
     """Stop the local GEV subprocess; repeated calls are harmless."""
-    global _process, _started, _output_reader
+    global _process, _started, _output_reader, _mcp_client
 
     with _process_lock:
+        mcp_client = _mcp_client
+        _mcp_client = None
+        if mcp_client is not None:
+            try:
+                mcp_client.stop()
+            except Exception as exc:
+                _log(f"GEV MCP: arresto non riuscito: {exc}")
         if not _started and _process is None:
             return
         process = _process
@@ -396,6 +478,52 @@ def stop() -> None:
             _process = None
             _output_reader = None
         _log("GEV: fermato")
+
+
+def get_extra_tool_declarations() -> list[dict]:
+    """Expose the local GEV MCP catalog as separate Gemini function tools."""
+    if not _startup_finished.wait(INSTALL_TIMEOUT_SEC + STARTUP_TIMEOUT_SEC + 30):
+        raise TimeoutError("GEV MCP startup did not finish before the declaration deadline")
+    if _mcp_client is None:
+        if _mcp_start_error:
+            raise RuntimeError(f"GEV MCP unavailable: {_mcp_start_error}")
+        return []
+
+    declarations = []
+    for tool in _mcp_client.tools:
+        try:
+            parameters = to_gemini_schema(tool["inputSchema"])
+            declarations.append({
+                "name": f"gev_mcp_{tool['name']}",
+                "description": tool["description"],
+                "parameters": parameters,
+            })
+        except (KeyError, TypeError, ValueError) as exc:
+            _log(f"GEV MCP: schema non esposto per '{tool.get('name')}': {exc}")
+    return declarations
+
+
+def run_extra_tool(tool_name: str, parameters: dict, player=None) -> str:
+    """Call one namespaced GEV MCP tool and return its summary and data."""
+    prefix = "gev_mcp_"
+    if not isinstance(tool_name, str) or not tool_name.startswith(prefix):
+        raise ValueError(f"Invalid GEV MCP tool name: {tool_name!r}")
+    if not isinstance(parameters, dict):
+        raise TypeError("GEV MCP arguments must be an object")
+    client = _mcp_client
+    if client is None:
+        detail = _mcp_start_error or "MCP client is not running"
+        raise McpClientError(f"GEV MCP unavailable: {detail}")
+
+    mcp_tool_name = tool_name[len(prefix):]
+    if not any(tool["name"] == mcp_tool_name for tool in client.tools):
+        raise McpClientError(f"Unknown GEV MCP tool: {mcp_tool_name}")
+    try:
+        result = client.call_tool(mcp_tool_name, parameters)
+    except (McpClientError, TimeoutError) as exc:
+        _log(f"GEV MCP: chiamata '{mcp_tool_name}' fallita: {exc}")
+        return f"GEV non è riuscito a eseguire '{mcp_tool_name}': {exc}"
+    return tool_result_text(mcp_tool_name, result)
 
 
 def run(parameters: dict, player=None) -> str:
@@ -419,7 +547,7 @@ def run(parameters: dict, player=None) -> str:
                 pass
         _log(message)
 
-    allowed_actions = {"open", "track", "layer", "reset", "annotate"}
+    allowed_actions = {"open", "track", "layer", "reset", "annotate", "historical_map"}
     if action not in allowed_actions:
         log_message(f"GEV: azione sconosciuta '{action}'")
         return f"Non riconosco l'azione GEV '{action}', signore."
@@ -429,13 +557,12 @@ def run(parameters: dict, player=None) -> str:
         params = {}
     elif action == "track":
         target_type = parameters.get("target_type")
-        if not isinstance(target_type, str) or target_type not in {"flight", "vessel", "satellite"}:
-            return "Per tracciare un oggetto mi serve il tipo (flight, vessel o satellite), signore."
+        if not isinstance(target_type, str) or target_type not in {"flight", "satellite"}:
+            return "Per tracciare un oggetto mi serve il tipo (flight o satellite), signore."
         target_id = parameters.get("target_id")
         if not isinstance(target_id, str) or not target_id.strip():
             target_description, missing = {
                 "flight": ("un volo", "il codice"),
-                "vessel": ("una nave", "l'MMSI"),
                 "satellite": ("un satellite", "il NORAD ID"),
             }[target_type]
             return f"Per tracciare {target_description} mi serve {missing}, signore."
@@ -449,6 +576,46 @@ def run(parameters: dict, player=None) -> str:
         if not isinstance(enabled, bool):
             return "Per il layer mi dica se devo attivarlo o disattivarlo, signore."
         params = {"layer": layer.strip(), "enabled": enabled}
+    elif action == "historical_map":
+        command = parameters.get("command")
+        if command == "show":
+            year = parameters.get("year")
+            if (
+                not isinstance(year, int)
+                or isinstance(year, bool)
+                or abs(year) > _MAX_SAFE_JS_INTEGER
+            ):
+                return "Per mostrare una mappa storica mi serve un anno intero, signore."
+            params = {"command": "show", "year": year}
+        elif command == "animate":
+            start_year = parameters.get("start_year")
+            end_year = parameters.get("end_year")
+            if any(
+                not isinstance(value, int) or isinstance(value, bool)
+                or abs(value) > _MAX_SAFE_JS_INTEGER
+                for value in (start_year, end_year)
+            ):
+                return "Per avviare l'animazione mi servono anno iniziale e finale, signore."
+            speed = parameters.get("speed", 3)
+            if (
+                not isinstance(speed, (int, float))
+                or isinstance(speed, bool)
+                or not 0.5 <= speed <= 30
+                or not math.isfinite(speed)
+            ):
+                return "La velocità deve essere compresa tra 0.5 e 30 secondi per snapshot, signore."
+            if start_year > end_year:
+                return "L'anno iniziale non può essere successivo a quello finale, signore."
+            params = {
+                "command": "animate",
+                "start_year": start_year,
+                "end_year": end_year,
+                "speed": speed,
+            }
+        elif command in {"stop", "clear"}:
+            params = {"command": command}
+        else:
+            return "Per la mappa storica scelga show, animate, stop oppure clear, signore."
     else:
         lat = parameters.get("lat")
         lon = parameters.get("lon")
@@ -483,6 +650,8 @@ def run(parameters: dict, player=None) -> str:
         details = f" (layer={params['layer']}, enabled={params['enabled']})"
     elif action == "annotate":
         details = f" (lat={params['lat']}, lon={params['lon']})"
+    elif action == "historical_map":
+        details = f" (command={params['command']})"
     log_message(f"GEV: invio azione '{action}'{details}")
 
     if action == "open":
@@ -490,7 +659,6 @@ def run(parameters: dict, player=None) -> str:
     if action == "track":
         target_name = {
             "flight": "il volo",
-            "vessel": "la nave",
             "satellite": "il satellite",
         }[params["target_type"]]
         return f"Traccio {target_name} {params['target_id']}, signore."
@@ -499,6 +667,8 @@ def run(parameters: dict, player=None) -> str:
         return f"{verb} il layer {params['layer']}, signore."
     if action == "reset":
         return "Resetto la vista di God's Eye View, signore."
+    if action == "historical_map":
+        return f"Richiesta mappa storica '{params['command']}' inviata, signore."
     return f"Aggiungo un'annotazione a ({params['lat']}, {params['lon']}), signore."
 
 
