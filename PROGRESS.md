@@ -3,6 +3,31 @@
 Source of truth: [`IMPLEMENTATION.md`](./IMPLEMENTATION.md).
 Repository: `ilfenomeno-gif/jarvis-ultimate`.
 
+## Preflight Fase 0 — 2026-10-05 (checkout confermato dall'utente)
+
+- Repo canonico: `ilfenomeno-gif/jarvis-ultimate`; la storia locale condivide
+  la base `419fc9004b9ff6850476ce19e3bbb82224e991ca` con il branch GEV
+  canonico; `canonical/main` osservato a `4f39fe414fb5a24e047af78909407601828341e1`.
+- Remotes già configurati: `origin` e `upstream` puntano a
+  `donnadonna9911-afk/jarvis`; `myfork` a `ilfenomeno-gif/jarvis`. Per questa
+  sessione nessun push/fetch tramite questi alias; il branch canonico è stato
+  verificato con URL esplicito. Non è stato cambiato `.git/config`.
+- HEAD iniziale: `feat/m4-gpu-monitor` @
+  `7a7c0ad6f50a6e2b64ba50211cd81cbe1e35911f`; working tree pulito.
+- Segreti: `config/api_keys.json` e `.env.local` ignorati da Git; `.env.local`
+  esiste ma non è stato letto; nessun file segreto in staging.
+- Baseline L1: comando effettivo `python -m pytest -q` → **125 passed, 0
+  failed**.
+- Ambiente: log `startup_stdout.log` aggiornato 2026-09-08 conteneva
+  `Connecting...`, non `JARVIS online`; non prova lo stato corrente. Gemini
+  corrente non osservato, nessuna chiamata autenticata eseguita; listener
+  porta 4173 assente alla verifica. Microfono/audio non testati.
+- Lavoro altrui: branch remoti canonici `main`, `feat/gev-integration`,
+  `revert-1-feat/gev-integration`; PR #2 aperta che propone il revert GEV.
+- Decisione repo: l'utente ha confermato `ilfenomeno-gif/jarvis-ultimate`.
+  La sessione prosegue localmente senza correggere i remote legacy e senza
+  merge/push.
+
 ## M0 — Repository discovery and baseline
 
 Stato: DONE
@@ -25,22 +50,25 @@ byte-per-byte con la copia nella root.
 
 ## M1 — Browser integrato
 
-Stato: BLOCKED
-Branch: `feat/m01-integrated-browser`
+Stato: IMPLEMENTATA – NON CONVALIDATA (L2)
+Branch implementazione: `feat/m01-integrated-browser`; revalidazione:
+`feat/m01-browser-revalidation` (base: `feat/m01-m03-fixtures`)
 File toccati: `docs/impl/M01-integrated-browser.md`, `core/browser_url.py`,
 `tests/test_browser_url.py`, `ui.py`, `main.py`, `tests/fixtures/`,
-`tests/serve_fixtures.py`, `tests/test_fixtures.py`, `PROGRESS.md`
-Verifica: PASS — suite cumulativa M1-M3 115/115, test fixture 4/4,
-compileall helper, Problems/Pylance e `git diff --check` senza errori. Server
-loopback smoke: 5 pagine HTTP 200; pagina lunga >=500 parole.
-Convalida: BLOCKED — fixture HTTP locale aggiunta, ma non è stata aperta
-nell'app: nessun processo Jarvis era attivo e la connessione Gemini non è stata
-verificata. I precedenti harness Qt/WebEngine isolati avevano terminato con
-`0xC0000409`.
-Problemi aperti: navigazione, cronologia, chiusura e redirect da provare nella
-finestra Jarvis con server `tests/serve_fixtures.py`.
-Recap: browser integrato e fixture deterministiche pronti; non dichiarata DONE
-senza evidenza funzionale nell'app.
+`tests/serve_fixtures.py`, `tests/test_fixtures.py`, `PROGRESS.md`,
+`OPEN_QUESTIONS.md`
+Verifica L1: PASS — `python -m pytest -q`: 115 passed; compileall mirato e
+`git diff --check` PASS.
+Convalida L2: PASS — server fixture temporaneo; `normalize_http_url` ha
+prodotto `http://127.0.0.1:55852/page_simple.html`; GET page_simple e
+page_simple_2: HTTP 200 e titolo/contenuto attesi; `javascript:alert(1)`
+rifiutato. Server chiuso.
+Convalida L3: BLOCCATA — nessuna prova visiva nel pannello QWebEngine di Jarvis;
+va eseguita dall'utente. L4: BLOCCATA — Gemini/microfono/audio non osservati.
+Problemi aperti: titolo realmente visibile, history/back/forward/reload/close,
+redirect live, dispatch tool Gemini e risposta vocale.
+Recap: funzioni/fixture HTTP verificate fino a L2; M1 non è PASS e non va
+unita prima della prova UI richiesta.
 
 ## M2 — Interazione attiva
 

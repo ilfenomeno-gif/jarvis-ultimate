@@ -1,10 +1,27 @@
 # Open questions
 
+## Preflight e stato osservato — 2026-10-05
+
+- Checkout confermato dall'utente come `ilfenomeno-gif/jarvis-ultimate`;
+  storia locale e remote canonico condividono la base GEV `419fc90`. I remote
+  configurati `origin`/`upstream` puntano però a `donnadonna9911-afk/jarvis`,
+  mentre `myfork` punta a `ilfenomeno-gif/jarvis`; nessun alias è stato
+  modificato e non vanno usati per push.
+- Baseline L1 `python -m pytest -q`: 125 passed.
+- `config/api_keys.json` e `.env.local` sono ignorati; `.env.local` è
+  presente ma non è stato letto. Nessuna credenziale trasmessa.
+- Gemini: ultimo indicatore disponibile è il log storico `startup_stdout.log`
+  del 2026-09-08 con `Connecting...`; nessun `JARVIS online` corrente
+  osservato. L'utente deve fornire l'esito della diagnostica diretta e della
+  sessione Live senza chiavi o log contenenti segreti.
+- M1 ha raggiunto L2: fixture HTTP locali servite e URL non sicuro rifiutato.
+  L3 richiede prova visiva dell'utente nell'app; L4 richiede Gemini/microfono.
+
 ## Gemini — connessione Live (blocco trasversale M1-M3)
 
-- `.env` non è presente. Il repository carica la credenziale da
-  `config/api_keys.json`; verifica locale non espositiva: file JSON valido e
-  campo `gemini_api_key` non vuoto. Nessun valore è stato letto o stampato.
+- Il repository carica la credenziale da `config/api_keys.json`; il campo è
+  stato verificato presente senza leggerne o stamparne il valore. `.env.local`
+  esiste ma non è stato aperto.
 - La chiamata diretta autenticata a Gemini non è stata eseguita: validità
   della chiave e accessibilità del modello non sono confermate. Non dichiarare
   la chiave scaduta senza un errore di autenticazione osservato; se Jarvis lo
@@ -33,42 +50,34 @@
   finestra è stata comunque enumerata e il processo è rimasto attivo. Registrato
   come warning baseline, da distinguere da eventuali regressioni.
 
-## M4 — Scelta integrazione NVIDIA (bloccante)
+## M4 — NVIDIA (scelta utente)
 
-Prima di implementare M4, indicare quale direzione desidera:
-
-- **A — G-Assist:** ponte tra Jarvis e NVIDIA G-Assist; richiede che G-Assist
-  sia installato e configurato.
-- **B — Moonlight/Sunshine:** Jarvis avvia Moonlight e seleziona/avvia giochi;
-  verificare disponibilità di Sunshine lato host (NVIDIA GameStream è dismesso).
-- **C — Altro:** descrivere l'integrazione desiderata (overlay, registrazione,
-  metriche prestazioni o altro).
-
-**Domanda:** quale opzione scegliere per M4: A, B o C? Per C specificare il
-risultato atteso.
-
-Stato: BLOCKED fino alla risposta; nessun codice NVIDIA viene implementato in
-anticipo in questo branch. L'implementazione Moonlight precedente rimane
-isolata in `feat/m04-moonlight-sunshine`, non confermata e non unita; in questo
-ciclo M4 è stata saltata.
+Scelta confermata: **C — nvidia-smi / monitoraggio GPU**, implementata sul
+branch locale `feat/m4-gpu-monitor`. La convalida vocale live è ancora bloccata
+dal mancato accertamento dello stato Gemini e richiede la prova dell'utente.
+Il vecchio branch `feat/m04-moonlight-sunshine` è **SCARTATO**, resta intatto e
+non va unito.
 
 ## M1 — Convalida browser integrato (bloccante)
 
-- La precedente prova dell'app riportava Gemini Live in `Connecting...`, ma
-  in questo ciclo non c'era un processo Jarvis attivo. La credenziale è
-  configurata nel file locale previsto dal repository; non è stata fatta una
-  chiamata autenticata diretta.
-- Tre harness Qt/WebEngine isolati erano terminati con codice nativo Windows
-  `0xC0000409`; le nuove fixture HTTP locali evitano dipendenze da siti remoti,
-  ma non sostituiscono la prova nella finestra Jarvis reale.
+- L2 PASS: `normalize_http_url` e server loopback hanno caricato le fixture
+  `page_simple.html` e `page_simple_2.html` con HTTP 200; schema JavaScript
+  rifiutato.
+- L3 non eseguito: manca la prova visiva dentro il pannello QWebEngine
+  nell'app Jarvis (titolo, cronologia, controlli e redirect). Richiede
+  l'intervento dell'utente sulla finestra.
+- L4/Gemini: non verificato in questa sessione. L'indicatore `Connecting...`
+  disponibile è in un log storico del 2026-09-08; nessuna chiamata
+  autenticata è stata fatta dall'agente.
 
 **Azione:** avviare Jarvis, verificare localmente `JARVIS online`, quindi
-servire `tests/fixtures/` e verificare nell'app i criteri in
-`docs/impl/M01-integrated-browser.md` (pagina semplice, link, cronologia e
-chiusura). Non registrare segreti nei log.
+servire `tests/fixtures/` (porta stampata da `python tests/serve_fixtures.py`)
+e verificare nella finestra i criteri L3 in
+`docs/impl/M01-integrated-browser.md`: pagina semplice, link, back/forward/
+reload/close e redirect. Riferire solo esito, senza segreti/log sensibili.
 
-Stato: BLOCKED; il codice resta committato in branch M1 ma la meccanica non è
-DONE.
+Stato: IMPLEMENTATA – NON CONVALIDATA (raggiunto L2); il codice resta sul
+branch M1 e non va unito prima del PASS UI richiesto.
 
 ## M2 — Convalida interazione browser (bloccante)
 
