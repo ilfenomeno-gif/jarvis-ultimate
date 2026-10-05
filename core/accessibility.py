@@ -61,34 +61,18 @@ class Pyttsx3Backend:
             self._engine.setProperty("voice", voice)
         if rate is not None:
             self._engine.setProperty("rate", rate)
+        self._lock = threading.Lock()
 
     def speak(self, text: str) -> None:
         if not text.strip():
             return
-        self._engine.say(text)
-        self._engine.runAndWait()
-
-    def speak_interruptibly(
-        self,
-        text: str,
-        stop_event: threading.Event,
-    ) -> None:
-        if not text.strip():
-            return
-        self._engine.say(text)
-        self._engine.startLoop(False)
-        try:
-            while self._engine.isBusy():
-                if stop_event.is_set():
-                    self._engine.stop()
-                    break
-                self._engine.iterate()
-                stop_event.wait(0.01)
-        finally:
-            self._engine.endLoop()
+        with self._lock:
+            self._engine.say(text)
+            self._engine.runAndWait()
 
     def cancel(self) -> None:
-        self._engine.stop()
+        with self._lock:
+            self._engine.stop()
 
 
 def create_speech_backend(

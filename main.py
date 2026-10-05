@@ -180,8 +180,8 @@ TOOL_DECLARATIONS = [
         "name": "open_app",
         "description": (
             "Opens any application on the computer. "
-            "Use this whenever the user asks to open, launch, or start an app or "
-            "program. For websites, use open_website. This includes GeoGuessr and speech-recognition "
+            "Use this whenever the user asks to open, launch, or start any app, "
+            "website, or program. This includes GeoGuessr and speech-recognition "
             "variants such as 'Gio Gasser', 'Jao Gasser', or 'Geo Guesser'; "
             "send those to Steam search instead of using web_search. "
             "Always call this tool — never just say you opened it."
@@ -192,7 +192,7 @@ TOOL_DECLARATIONS = [
                 "app_name": {
                     "type": "STRING",
                     "description": (
-                        "Application or program name, not a website URL. "
+                        "Application or website name. Preserve the user's words when unsure; "
                         "GeoGuessr variants are normalized automatically. Examples: "
                         "'WhatsApp', 'Chrome', 'Spotify', 'GeoGuessr'."
                     )
@@ -200,58 +200,6 @@ TOOL_DECLARATIONS = [
             },
             "required": ["app_name"]
         }
-    },
-    {
-        "name": "open_website",
-        "description": (
-            "Opens a website inside Jarvis's integrated browser. Use for website "
-            "names such as YouTube or an HTTP(S) URL; do not launch an external browser."
-        ),
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "url": {
-                    "type": "STRING",
-                    "description": "Website name or URL using only http or https.",
-                },
-            },
-            "required": ["url"],
-        },
-    },
-    {
-        "name": "press_key",
-        "description": (
-            "Press one allowed key in Jarvis's integrated browser page. "
-            "Allowed: A-Z, arrow keys, Space, Enter and Escape. "
-            "Use this for controls in the currently open web page."
-        ),
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "key": {
-                    "type": "STRING",
-                    "description": "One key: A-Z, ArrowUp/Down/Left/Right, Space, Enter or Escape.",
-                },
-            },
-            "required": ["key"],
-        },
-    },
-    {
-        "name": "click_link",
-        "description": (
-            "Clicks a visible link in Jarvis's integrated browser by its displayed "
-            "text. If the text is ambiguous, no link is clicked."
-        ),
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "link_text": {
-                    "type": "STRING",
-                    "description": "The visible text of the link to click.",
-                },
-            },
-            "required": ["link_text"],
-        },
     },
     {
         "name": "web_search",
@@ -444,11 +392,9 @@ TOOL_DECLARATIONS = [
     {
         "name": "browser_control",
         "description": (
-            "Controls the user's external web browser. For a website that should open "
-            "inside Jarvis, use open_website instead. Use this for searching, clicking "
-            "elements, filling forms, scrolling, screenshots, navigation, or an explicit "
-            "request to use an external browser. Simple open/search requests launch the "
-            "user's browser normally (their real profile "
+            "Controls any web browser. Use for: opening websites, searching the web, "
+            "clicking elements, filling forms, scrolling, screenshots, navigation, any web-based task. "
+            "Simple open/search requests launch the user's own browser normally (their real profile "
             "and logged-in accounts); interactive actions (click, type, fill_form...) attach an "
             "automation browser. "
             "Always pass the 'browser' parameter when the user specifies a browser (e.g. 'open in Edge', "
@@ -491,27 +437,6 @@ TOOL_DECLARATIONS = [
             },
             "required": []
         }
-    },
-    {
-        "name": "read_page",
-        "description": (
-            "Reads the page currently open in Jarvis's integrated browser aloud "
-            "using offline speech. Use stop_reading to interrupt."
-        ),
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {},
-            "required": [],
-        },
-    },
-    {
-        "name": "stop_reading",
-        "description": "Stops Jarvis's integrated browser page reader.",
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {},
-            "required": [],
-        },
     },
     {
         "name": "file_controller",
@@ -953,7 +878,6 @@ class JarvisLive:
         self._loop                = None
         self._is_speaking         = False
         self._speaking_lock       = threading.Lock()
-        self._page_reader_audio_active = threading.Event()
         self._phone_active        = False   # True while phone mic is streaming; pauses PC mic
         self._pending_vision       = None    # (img_bytes, mime_type, question, angle) to inject after tool response
         self._vision_cam_active    = False   # True if camera was opened for vision → auto-close after response
@@ -966,9 +890,6 @@ class JarvisLive:
         self.ui.on_interrupt      = self.interrupt
         self.ui.on_voice_change   = self._on_voice_change     # voice picker → rebuild session
         self.ui.on_audio_device_change = self._on_audio_device_change
-        self.ui._win._page_reader_audio_sig.connect(
-            self._set_page_reader_audio_active
-        )
         self._reconnect_event: asyncio.Event | None = None
         self._reconnect_keep = True   # False → next rebuild drops the resumption handle
 
@@ -1154,13 +1075,6 @@ class JarvisLive:
         elif not self.ui.muted:
             self.ui.set_state("LISTENING")
 
-    def _set_page_reader_audio_active(self, active: bool) -> None:
-        if active:
-            self._page_reader_audio_active.set()
-            self.set_speaking(False)
-        else:
-            self._page_reader_audio_active.clear()
-
     def interrupt(self) -> None:
         """Stop JARVIS mid-speech: drain queued audio and open mic immediately."""
         self._interrupted = True
@@ -1276,10 +1190,7 @@ class JarvisLive:
         name = fc.name
         args = dict(fc.args or {})
 
-        logged_args = dict(args)
-        if name == "open_website" and "url" in logged_args:
-            logged_args["url"] = "[URL REDACTED]"
-        print(f"[JARVIS] 🔧 {name}  {logged_args}")
+        print(f"[JARVIS] 🔧 {name}  {args}")
         self.ui.set_state("THINKING")
 
         decision = route_tool(name, args, self._last_user_text)
@@ -1332,18 +1243,6 @@ class JarvisLive:
                 r = await loop.run_in_executor(None, lambda: open_app(parameters=args, response=None, player=self.ui))
                 result = r or f"Opened {args.get('app_name')}."
 
-            elif name == "open_website":
-                self.ui.open_url_in_webview(args.get("url"))
-                result = "Opening the website inside Jarvis."
-
-            elif name == "press_key":
-                key = self.ui.press_key_in_webview(args.get("key"))
-                result = f"Requested a {key} key press in the integrated browser."
-
-            elif name == "click_link":
-                link_text = self.ui.click_link_in_webview(args.get("link_text"))
-                result = f"Requested click on the visible link '{link_text}'."
-
             elif name == "weather_report":
                 r = await loop.run_in_executor(None, lambda: weather_action(parameters=args, player=self.ui))
                 result = r or "Weather delivered."
@@ -1355,14 +1254,6 @@ class JarvisLive:
             elif name == "read_active_page":
                 r = await loop.run_in_executor(None, lambda: read_active_page(parameters=args, player=self.ui))
                 result = r or "Could not read the page."
-
-            elif name == "read_page":
-                self.ui.read_page_aloud()
-                result = "Requested offline reading of the integrated browser page."
-
-            elif name == "stop_reading":
-                self.ui.stop_reading()
-                result = "Requested that the integrated browser page reader stop."
 
             elif name == "file_controller":
                 r = await loop.run_in_executor(None, lambda: file_controller(parameters=args, player=self.ui))
@@ -1816,8 +1707,7 @@ class JarvisLive:
                         self._turn_done_event.clear()
                     continue
 
-                if not self._page_reader_audio_active.is_set():
-                    self.set_speaking(True)
+                self.set_speaking(True)
 
                 # Batch all immediately-available chunks into one write to reduce
                 # thread-pool round-trips (was one asyncio.to_thread per 50ms slice).
@@ -1830,15 +1720,12 @@ class JarvisLive:
                         break
 
                 # Drive the HUD waveform from JARVIS's own voice while speaking.
-                if not self._page_reader_audio_active.is_set():
-                    try:
-                        self.ui.set_audio_level(_pcm_level(
-                            np.frombuffer(bytes(batch), dtype=np.int16)))
-                    except Exception:
-                        pass
+                try:
+                    self.ui.set_audio_level(_pcm_level(
+                        np.frombuffer(bytes(batch), dtype=np.int16)))
+                except Exception:
+                    pass
 
-                if self._page_reader_audio_active.is_set():
-                    continue
                 try:
                     await asyncio.to_thread(stream.write, bytes(batch))
                 except (RuntimeError, asyncio.CancelledError):
