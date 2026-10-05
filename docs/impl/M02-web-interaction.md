@@ -58,14 +58,19 @@ accessi Qt fuori dal thread GUI.
 - Link: escaping `json.dumps` per apici, doppi apici, newline e payload simili
   a codice; nessun match non visibile; testo ambiguo non clicca.
 - Verifica dispatch signal wrapper e declarations Gemini via test.
-- Regression: suite Jarvis e `compileall`; smoke app/GEV. Test gioco Snake e
-  click live solo se sessione Gemini e runtime WebEngine sono disponibili;
-  l'ostacolo M1 è ereditato e rimane esplicito.
+- Regression: suite Jarvis e `compileall`; smoke app/GEV. Servire
+  `tests/fixtures/`, aprire `http://127.0.0.1:<porta>/snake.html`, premere le
+  frecce e osservare il canvas/la posizione della testa; aprire
+  `page_simple.html` e cliccare `Leggi pagina successiva`. Usare Jarvis reale,
+  non un harness Qt isolato. Provare separatamente il fallback su una pagina
+  che ignora gli eventi JS sintetici.
 
 ## 5. Criteri di accettazione (checklist PASS/FAIL)
 
-- [ ] "Premi freccia su" muove lo Snake web di test.
-- [ ] "Clicca su <testo link>" attiva il link corretto.
+- [ ] Su `http://127.0.0.1:<porta>/snake.html`, i comandi freccia muovono lo
+  Snake nel canvas 20x20; game over e Restart sono disponibili.
+- [ ] Su `http://127.0.0.1:<porta>/page_simple.html`, cliccare
+  `Leggi pagina successiva` apre la pagina locale corretta.
 - [x] Input con virgolette/apici/caratteri speciali è JSON-escaped nei payload
   generati e non interpolato come codice.
 - [x] Tasto fuori whitelist viene rifiutato con errore; richiesta widget
@@ -102,6 +107,12 @@ modificare i commit M0/M1, non cancellare configurazioni, non forzare push.
 - 2026-10-04: implementati helper, declarations Gemini, wrapper signal, slot
   Qt e fallback QTest. `pytest -q`: 99 passed; `compileall` sui file Python
   modificati: PASS; Problems/Pylance: nessun errore; `git diff --check`: PASS.
+- 2026-10-05: criteri live aggiornati alle fixture locali Snake e link; prova
+  nell'app non eseguita perché non c'era un processo Jarvis attivo e Gemini
+  non è stato convalidato.
+- 2026-10-05: suite cumulativa `pytest -q`: 115 passed; fixture servite
+  correttamente via HTTP locale, ma nessun tasto/link è stato provato nel
+  browser integrato.
 - Convalida manuale: BLOCKED; nessun processo Jarvis/Gemini attivo durante il
   controllo e il runtime WebEngine live ha il blocker nativo registrato in M1.
   Il listener 4173 osservato appartiene a `node`; non è stato avviato un
@@ -110,5 +121,6 @@ modificare i commit M0/M1, non cancellare configurazioni, non forzare push.
 ## 9. Recap finale
 
 Implementata l'interazione attiva del browser integrato in modo fail-closed
-per chiavi non consentite e link ambigui. La suite automatica completa passa;
-M2 resta BLOCKED finché i criteri manuali non sono eseguiti nel Jarvis live.
+per chiavi non consentite e link ambigui. Le fixture locali rendono ripetibili
+Snake e click; M2 resta BLOCKED finché i criteri non sono osservati nel Jarvis
+live.

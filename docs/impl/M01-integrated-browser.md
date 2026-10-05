@@ -57,11 +57,11 @@ separato dalla pagina GEV e dal suo lifecycle.
 - Unit: alias `YouTube`, URL `example.com`, HTTP e HTTPS; valori vuoti,
   `file://`, `javascript:`, `data:`, `ftp://`, URL senza host, credenziali e
   porte non valide.
-- UI: load di una pagina HTTP locale controllata; indietro/avanti/ricarica;
-  chiusura che ripristina HUD o GEV; URL invalido non naviga; verifica che
-  QWebEngine browser e GEV restino widget distinti. Harness Qt/WebEngine
-  isolato ha terminato con crash nativo; resta necessario il test interattivo
-  nell'app funzionante.
+- UI: servire `tests/fixtures/` con `python tests/serve_fixtures.py` e usare
+  `http://127.0.0.1:<porta>/page_simple.html`; verificare titolo e paragrafo,
+  link a `page_simple_2.html`, indietro/avanti/ricarica e chiusura che ripristina
+  HUD o GEV. URL invalido non naviga; browser e GEV restano widget distinti.
+  Il test va eseguito nell'app funzionante, non con un harness Qt isolato.
 - Gemini/tool: declaration `open_website`, dispatch, errore esplicito su input
   invalido e nessuna azione widget fuori dal thread GUI.
 - Regression: `pytest` mirato (poi suite Jarvis); GEV lifecycle e test già
@@ -71,8 +71,9 @@ separato dalla pagina GEV e dal suo lifecycle.
 
 ## 5. Criteri di accettazione (checklist PASS/FAIL)
 
-- [ ] YouTube/example.com e cronologia browser funzionano nel WebEngine live:
-  bloccato dalla sessione Gemini non connessa e dal crash dei test runtime.
+- [ ] `http://127.0.0.1:<porta>/page_simple.html` mostra titolo e paragrafo;
+  il link apre `page_simple_2.html`, indietro/avanti ripristinano la cronologia
+  e chiudi ripristina la vista precedente. Convalida live ancora bloccata.
 - [x] `file://`, `javascript:`, `data:`, FTP e altri schemi sono rifiutati dal
   normalizzatore; test focused passati.
 - [x] La richiesta URL dal wrapper Jarvis passa attraverso un signal Qt; test
@@ -81,8 +82,8 @@ separato dalla pagina GEV e dal suo lifecycle.
   con doppia apertura pass.
 - [x] GEV resta su widget/pagina distinti; app avviata dopo le modifiche, GEV
   pronto con 30 tool MCP.
-- [ ] Nessuna navigazione malevola è stata eseguita nel WebEngine live;
-  l'allow-list dei redirect è implementata, ma non esiste ancora evidenza runtime.
+- [ ] Il redirect a uno schema non HTTP(S) viene bloccato nel WebEngine live;
+  l'allow-list è implementata, ma non esiste ancora evidenza runtime.
 
 ## 6. Analisi di fattibilità del presente file (checklist GO/NO-GO + esito)
 
@@ -118,14 +119,22 @@ riscrittura della history.
 - 2026-10-04: tre prove runtime Qt/WebEngine isolate terminate con crash nativo
   Windows `0xC0000409`, prima di produrre risultati; harness temporanei non
   sono stati mantenuti. Navigazione e history reali non sono state convalidate.
+- 2026-10-05: aggiunte fixture HTTP locali (`page_simple.html`,
+  `page_simple_2.html`) e server loopback su porta assegnata dal sistema;
+  convalida nell'app non eseguita: non c'era un processo Jarvis attivo e la
+  sessione Gemini non è stata verificata con una richiesta autenticata.
+- 2026-10-05: `pytest -q`: 115 passed; `compileall` helper fixture e
+  `git diff --check`: PASS. `python tests/serve_fixtures.py` ha assegnato la
+  porta 49921; tutte le 5 pagine hanno risposto HTTP 200 e il test automatico
+  conferma almeno 500 parole nella pagina lunga. Server arrestato dopo lo
+  smoke test; nessuna pagina aperta nell'app Jarvis.
 - Convalida: **BLOCKED**, in attesa di sessione Gemini attiva o verifica UI
   interattiva con ambiente Qt/WebEngine funzionante.
 
 ## 9. Recap finale
 
 Il browser integrato è implementato, con URL HTTP(S) validati, dichiarazione
-Gemini, segnali Qt, pagina distinta da GEV e controlli UI. Test focused/suite
-e avvio Jarvis passano. I criteri di navigazione live, YouTube, history e
-redirect non sono stati convalidati: la sessione Gemini non era disponibile e
-i test runtime WebEngine isolati hanno terminato con `0xC0000409`. Stato M1:
-**BLOCKED**, non DONE; completare la prova manuale prima di promuoverlo.
+Gemini, segnali Qt, pagina distinta da GEV e controlli UI. Le fixture locali
+riducono la prova funzionale a risorse deterministiche e offline. Navigazione,
+cronologia e redirect live non sono stati convalidati nell'app reale; M1 resta
+**BLOCKED**, non DONE, finché non sono osservati nell'app.

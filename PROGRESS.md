@@ -28,15 +28,19 @@ byte-per-byte con la copia nella root.
 Stato: BLOCKED
 Branch: `feat/m01-integrated-browser`
 File toccati: `docs/impl/M01-integrated-browser.md`, `core/browser_url.py`,
-`tests/test_browser_url.py`, `ui.py`, `main.py`, `PROGRESS.md`
-Verifica: PASS parziale — suite 73/73, compileall, syntax/Pylance; smoke app
-con finestra Jarvis e GEV/MCP pronto.
-Convalida: BLOCKED — nessuna navigazione browser verificabile; Gemini è rimasto
-`Connecting...` e tre harness Qt/WebEngine hanno terminato con `0xC0000409`.
-Problemi aperti: serve sessione Live attiva o verifica interattiva WebEngine per
-YouTube/example.com, history e redirect.
-Recap: implementata vista browser separata, signal Qt, tool Gemini e allow-list
-HTTP(S); non dichiarata DONE senza evidenza funzionale.
+`tests/test_browser_url.py`, `ui.py`, `main.py`, `tests/fixtures/`,
+`tests/serve_fixtures.py`, `tests/test_fixtures.py`, `PROGRESS.md`
+Verifica: PASS — suite cumulativa M1-M3 115/115, test fixture 4/4,
+compileall helper, Problems/Pylance e `git diff --check` senza errori. Server
+loopback smoke: 5 pagine HTTP 200; pagina lunga >=500 parole.
+Convalida: BLOCKED — fixture HTTP locale aggiunta, ma non è stata aperta
+nell'app: nessun processo Jarvis era attivo e la connessione Gemini non è stata
+verificata. I precedenti harness Qt/WebEngine isolati avevano terminato con
+`0xC0000409`.
+Problemi aperti: navigazione, cronologia, chiusura e redirect da provare nella
+finestra Jarvis con server `tests/serve_fixtures.py`.
+Recap: browser integrato e fixture deterministiche pronti; non dichiarata DONE
+senza evidenza funzionale nell'app.
 
 ## M2 — Interazione attiva
 
@@ -44,15 +48,16 @@ Stato: BLOCKED
 Branch: `feat/m02-web-interaction`
 File toccati: `core/browser_interaction.py`,
 `tests/test_browser_interaction.py`, `ui.py`, `main.py`,
-`docs/impl/M02-web-interaction.md`, `PROGRESS.md`
-Verifica: PASS — suite completa 99/99, compileall modificati, Pylance/Problems
-senza errori, `git diff --check` pulito.
+`docs/impl/M02-web-interaction.md`, `tests/fixtures/snake.html`,
+`tests/fixtures/page_simple.html`, `tests/serve_fixtures.py`, `PROGRESS.md`
+Verifica: PASS — suite cumulativa M1-M3 115/115, compileall helper,
+Pylance/Problems senza errori, `git diff --check` pulito; fixture link/Snake
+servite HTTP 200.
 Convalida: PASS parziale per whitelist, JSON escaping, signal Qt e fallback
-quando il dispatch JS fallisce; interazione live Snake/link, fallback quando
-un gioco ignora silenziosamente l'evento e smoke GEV restano BLOCKED.
-Problemi aperti: manca una sessione Jarvis/Gemini utilizzabile; il runtime
-WebEngine live resta bloccato dal crash nativo già rilevato in M1.
-Recap: implementati `press_key`/`click_link` per il browser integrato; non
+quando il dispatch JS fallisce; Snake, click link, fallback su gioco reale e
+smoke GEV restano BLOCKED.
+Problemi aperti: manca una sessione Jarvis/Gemini attiva e osservabile.
+Recap: interazione implementata e fixture Snake/link disponibili; non
 dichiarato DONE senza evidenza live.
 
 ## M3 — Screen reader personale
@@ -61,31 +66,37 @@ Stato: BLOCKED
 Branch: `feat/m03-screen-reader`
 File toccati: `core/page_reader.py`, `core/accessibility.py`, `ui.py`, `main.py`,
 `tests/test_page_reader.py`, `docs/impl/M03-screen-reader.md`,
-`docs/REPO_MAP.md`, `OPEN_QUESTIONS.md`, `PROGRESS.md`
-Verifica: PASS — suite completa 111/111, compileall file M3, Pylance/Problems
-senza errori, `git diff --check` pulito; import main PASS con 37 tool univoci.
-Convalida: PASS parziale per testo vuoto/enorme, segmentazione, worker,
-stop fake, callback Qt e gate audio. BLOCKED per voce live, interazione browser
-e conflitto audio sul dispositivo reale.
-Problemi aperti: output audio host non produceva audio nella baseline; M1
-browser/Gemini live è tuttora bloccato. `pyttsx3` è installato, ma non si è
-eseguito TTS reale né si è stampata/modificata alcuna credenziale.
-Recap: letto DOM in callback async, max 20.000 caratteri/chunk <=800, pyttsx3
-in worker con event loop esterno e stop sullo stesso thread; l'audio Gemini
-viene drenato durante la lettura. Non dichiarato DONE senza prova audio reale.
+`docs/REPO_MAP.md`, `OPEN_QUESTIONS.md`, `PROGRESS.md`,
+`tests/fixtures/page_long.html`, `tests/fixtures/page_empty.html`,
+`tests/serve_fixtures.py`, `tests/test_fixtures.py`
+Verifica: PASS — suite cumulativa M1-M3 115/115, compileall helper,
+Pylance/Problems senza errori, `git diff --check` pulito; import main PASS con
+37 tool univoci; pagina lunga verificata >=500 parole.
+Convalida: PASS parziale per testo vuoto/enorme, segmentazione, worker, stop
+fake, callback Qt e gate audio; BLOCKED per voce live e sovrapposizione reale.
+Problemi aperti: non ci sono ancora prove audio/WebEngine live; `pyttsx3` è
+installato ma il backend audio host non aveva prodotto audio nella baseline.
+Recap: aggiunte fixture lunga/vuota (oltre 500 parole nella lunga); non
+dichiarato DONE senza ascolto nel Jarvis reale.
 
 ## M4 — Integrazione NVIDIA
 
 Stato: BLOCKED
-Branch: non creato
-File toccati: nessuno
+Branch: `feat/m04-moonlight-sunshine` (separato; non attivo in questo ciclo)
+File toccati: implementazione Moonlight provvisoria già presente nel branch
+separato; nessun file M4 modificato in questo ciclo.
 Verifica: non applicabile
-Convalida: non applicabile
-Problemi aperti: scelta utente richiesta; domanda e opzioni in
-`OPEN_QUESTIONS.md`.
-Recap: nessuna implementazione prima di una risposta esplicita.
+Convalida: BLOCKED per scelta non ricevuta e prerequisiti Moonlight/Sunshine
+assenti.
+Problemi aperti: scelta A/B/C richiesta in `OPEN_QUESTIONS.md`; branch
+Moonlight preesistente non confermato né unito.
+Recap: M4 saltata secondo STEP 0; nessuna scelta è attribuita all'utente.
 
 ## Prossimo passo
 
-M0–M3 sono DONE o BLOCKED; attendere scelta utente M4. Riprendere i criteri
-live M1–M3 quando browser, sessione Gemini e output audio sono disponibili.
+M0 DONE; M1–M3 BLOCKED in attesa delle convalide nell'app. `.env` non presente;
+il repository usa `config/api_keys.json` e il campo chiave è configurato, ma
+non sono state verificate via richiesta autenticata la chiave o l'accessibilità
+del modello. La documentazione pubblica elenca ancora il modello 2.5 Live
+configurato, quindi non è stata fatta una modifica speculativa. M4 è stata
+saltata: attendere la scelta A/B/C.

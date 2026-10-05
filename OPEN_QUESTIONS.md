@@ -1,5 +1,27 @@
 # Open questions
 
+## Gemini — connessione Live (blocco trasversale M1-M3)
+
+- `.env` non è presente. Il repository carica la credenziale da
+  `config/api_keys.json`; verifica locale non espositiva: file JSON valido e
+  campo `gemini_api_key` non vuoto. Nessun valore è stato letto o stampato.
+- La chiamata diretta autenticata a Gemini non è stata eseguita: validità
+  della chiave e accessibilità del modello non sono confermate. Non dichiarare
+  la chiave scaduta senza un errore di autenticazione osservato; se Jarvis lo
+  mostra, l'utente deve rigenerarla.
+- Il modello Live configurato nel sorgente è
+  `models/gemini-2.5-flash-native-audio-preview-12-2025`. Non c'era un processo
+  Jarvis attivo né un log recente `JARVIS online`; disponibilità corrente del
+  modello non verificata tramite una sessione autenticata. La documentazione
+  pubblica Gemini lo elenca ancora tra i modelli Live e non lo marca come
+  deprecato; raccomanda Gemini 3.8 Live come default per nuove integrazioni.
+  Fonte: https://ai.google.dev/gemini-api/docs/models e
+  https://ai.google.dev/gemini-api/docs/live-api/capabilities.
+- Per riprovare: avviare Jarvis e controllare localmente la connessione senza
+  copiare chiavi o log che le contengano. Se il log riporta modello non
+  disponibile, aggiornare a un modello Live stabile supportato e annotare il
+  cambio in `PROGRESS.md`.
+
 ## M0 — Baseline
 
 - La finestra Jarvis e il plugin GEV sono stati osservati all'avvio; la
@@ -26,23 +48,24 @@ Prima di implementare M4, indicare quale direzione desidera:
 risultato atteso.
 
 Stato: BLOCKED fino alla risposta; nessun codice NVIDIA viene implementato in
-anticipo.
+anticipo in questo branch. L'implementazione Moonlight precedente rimane
+isolata in `feat/m04-moonlight-sunshine`, non confermata e non unita; in questo
+ciclo M4 è stata saltata.
 
 ## M1 — Convalida browser integrato (bloccante)
 
-- L'app Jarvis aggiornata si avvia e il plugin GEV/MCP è pronto, ma Gemini Live
-  resta in `Connecting...`; il comando testuale controllato non raggiunge il
-  dispatch tool.
-- Tre harness Qt/WebEngine isolati sono terminati con codice nativo Windows
-  `0xC0000409` prima di produrre risultati.
-- I test unitari coprono parsing URL, allow-list, signal wrapper e ripristino
-  stack simulato; non provano il caricamento HTTP reale né cronologia.
+- La precedente prova dell'app riportava Gemini Live in `Connecting...`, ma
+  in questo ciclo non c'era un processo Jarvis attivo. La credenziale è
+  configurata nel file locale previsto dal repository; non è stata fatta una
+  chiamata autenticata diretta.
+- Tre harness Qt/WebEngine isolati erano terminati con codice nativo Windows
+  `0xC0000409`; le nuove fixture HTTP locali evitano dipendenze da siti remoti,
+  ma non sostituiscono la prova nella finestra Jarvis reale.
 
-**Domanda:** appena la sessione Gemini è collegata o il runtime Qt/WebEngine è
-disponibile per test interattivi, verificare nel Jarvis i criteri browser in
-`docs/impl/M01-integrated-browser.md` (YouTube/example.com, back/forward/reload,
-close e rifiuto schemi). Non servono nuove chiavi o modifiche a `.env` per
-implementazione; non registrare segreti nei log.
+**Azione:** avviare Jarvis, verificare localmente `JARVIS online`, quindi
+servire `tests/fixtures/` e verificare nell'app i criteri in
+`docs/impl/M01-integrated-browser.md` (pagina semplice, link, cronologia e
+chiusura). Non registrare segreti nei log.
 
 Stato: BLOCKED; il codice resta committato in branch M1 ma la meccanica non è
 DONE.
@@ -52,17 +75,15 @@ DONE.
 - I test automatici verificano whitelist, payload JavaScript JSON-escaped,
   wrapper signal, schema tools e fallback `QTest` quando il dispatch JavaScript
   fallisce.
-- Non è stato verificato il comportamento contro una pagina reale: nessuna
-  sessione Jarvis/Gemini era disponibile nel controllo finale; l'uso standalone
-  di Qt/WebEngine ha già mostrato un crash nativo Windows `0xC0000409` nel ciclo
-  M1.
+- Le fixture locali esistono, ma non è stato verificato il comportamento in
+  una pagina reale: nessuna sessione Jarvis/Gemini era attiva nel controllo.
 - Un dispatch JavaScript riuscito non dimostra che un gioco accetti l'evento
   sintetico (`isTrusted=false`); il fallback Qt scatta solo su fallimento del
   dispatch, per evitare doppie pressioni non sicure.
 
-**Azione di convalida futura:** con Jarvis e GEV/browser funzionanti, testare
-Snake con freccia su, click su link visibile e pagina che richiede input
-`isTrusted`; verificare che link ambiguo/non trovato non venga cliccato.
+**Azione di convalida futura:** con Jarvis e GEV/browser funzionanti, servire
+le fixture e testare Snake, link visibile e fallback su pagina che richiede
+input `isTrusted`; verificare che link ambiguo/non trovato non venga cliccato.
 
 Stato: BLOCKED; non serve una scelta per proseguire con M3.
 
@@ -75,13 +96,14 @@ Stato: BLOCKED; non serve una scelta per proseguire con M3.
   della baseline però è stato saltato perché non produceva audio. Non è stata
   eseguita sintesi reale, perciò la risposta del dispositivo e l'interruzione
   audio in tempo reale con il driver Windows non sono note.
-- La pagina letta dipende dal browser M1, la cui navigazione live è ancora
-  bloccata.
+- Le fixture per testo lungo/vuoto sono disponibili, ma la lettura dipende dal
+  browser M1 e da un dispositivo audio funzionante; nessuna prova live è stata
+  eseguita.
 
 **Azione di convalida futura:** con audio funzionante e una pagina aperta in
 Jarvis, verificare lettura fluida, GUI reattiva, stop entro pochi secondi e
-assenza di voce Gemini sovrapposta. Verificare pagina vuota e oltre 20.000
-caratteri anche nel browser; i test unitari già coprono le funzioni di limite.
+assenza di voce Gemini sovrapposta. Verificare pagina vuota e testo lungo anche
+nel browser; i test unitari coprono già le funzioni di limite.
 
 Stato: BLOCKED; nessuna nuova credenziale è richiesta, si può passare alla
 scelta M4.

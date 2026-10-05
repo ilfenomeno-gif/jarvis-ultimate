@@ -80,15 +80,19 @@ comando stop non bloccante.
 - Test signal wrapper e declarations `read_page`/`stop_reading`.
 - Regression: suite completa, compileall e Problems/Pylance; smoke GEV/browser
   solo se runtime è disponibile.
-- Manuale: caricare una pagina, leggere e interrompere durante la voce,
-  verificare GUI reattiva e assenza di audio sovrapposto alla voce Gemini.
+- Manuale: servire `tests/fixtures/`, aprire
+  `http://127.0.0.1:<porta>/page_long.html`, leggere e interrompere durante la
+  voce; verificare GUI reattiva e assenza di audio sovrapposto. Ripetere con
+  `page_empty.html` e verificare esito esplicito senza crash.
 
 ## 5. Criteri di accettazione (checklist PASS/FAIL)
 
-- [ ] "Leggi la pagina" avvia la lettura; la GUI resta reattiva.
+- [ ] "Leggi la pagina" su `page_long.html` avvia la lettura; la GUI resta
+  reattiva.
 - [ ] "Smetti di leggere" interrompe entro pochi secondi.
-- [x] Gestione automatica testo pagina vuoto/lunghissimo: rifiuto esplicito,
-  estrazione limitata a 20.001 caratteri e chunk <=800 senza crash.
+- [ ] `page_empty.html` riporta "The active page contains no readable text"
+  (o messaggio equivalente) senza crash;
+  `page_long.html` resta entro il limite di estrazione e chunk <=800.
 - [ ] Nessun conflitto con il TTS già usato da Jarvis.
 - [ ] Il testo letto deriva dalla pagina attiva nel browser integrato.
 
@@ -126,6 +130,11 @@ audio/chiavi. Non usare force-push o riscrittura history.
   nessun errore; `git diff --check`: PASS.
 - Import check `main`: PASS, 37 tool dichiarati e nessun nome duplicato;
   helper page reader importato e testo breve segmentato correttamente.
+- 2026-10-05: aggiunte fixture deterministiche `page_long.html` (oltre 500
+  parole) e `page_empty.html`; test audio/browser live non eseguito.
+- 2026-10-05: suite cumulativa `pytest -q`: 115 passed; `compileall` delle
+  utility fixture: PASS. La risposta del dispositivo audio e la lettura del
+  DOM nell'app reale restano non testate.
 - Convalida live: BLOCKED; baseline segnala che l'output audio host non produce
   audio e M1 non ha sessione Gemini/browser verificabile. Il package `pyttsx3`
   è importabile, ma non è stata avviata sintesi reale né modificata alcuna key.
@@ -133,6 +142,7 @@ audio/chiavi. Non usare force-push o riscrittura history.
 ## 9. Recap finale
 
 Lettore integrato implementato in modo bounded, asincrono e interrompibile;
-l'output Gemini viene drenato mentre la voce offline è attiva. Verifiche
-automatiche passate. M3 resta BLOCKED in attesa della convalida audio/WebEngine
-live; non si presume che pyttsx3 produca audio funzionante sull'host.
+l'output Gemini viene drenato mentre la voce offline è attiva. Le fixture
+offline coprono pagina lunga e vuota. M3 resta BLOCKED in attesa della
+convalida audio/WebEngine live; non si presume che pyttsx3 produca audio
+funzionante sull'host.
