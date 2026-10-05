@@ -32,8 +32,15 @@ from PyQt6.QtWidgets import (
     QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplitter,
     QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QProgressBar,
 )
+from PyQt6.QtTest import QTest
 from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineScript
 from PyQt6.QtWebEngineWidgets import QWebEngineView
+from core.browser_interaction import (
+    build_click_link_script, build_keyboard_event_script,
+    normalize_link_text, normalize_web_key,
+)
+from core.page_reader import MAX_PAGE_CHARS, PageSpeechWorker
+from core.browser_url import is_allowed_http_scheme, normalize_http_url
 
 _GEV_URL = "http://127.0.0.1:4173/?ui=panels"
 _GEV_LAYERS = {
@@ -68,6 +75,18 @@ class _GEVWebEnginePage(QWebEnginePage):
                 self._message_handler(payload)
             return
         super().javaScriptConsoleMessage(level, message, line_number, source_id)
+
+
+class _SafeBrowserPage(QWebEnginePage):
+    def __init__(self, parent, blocked_callback):
+        super().__init__(parent)
+        self._blocked_callback = blocked_callback
+
+    def acceptNavigationRequest(self, url, navigation_type, is_main_frame):
+        if not is_allowed_http_scheme(url.scheme()):
+            self._blocked_callback()
+            return False
+        return super().acceptNavigationRequest(url, navigation_type, is_main_frame)
 
 def _base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -2425,6 +2444,13 @@ class MainWindow(QMainWindow):
     _confirm_hide_sig = pyqtSignal()
     _widget_sig       = pyqtSignal(dict)       # (spec) — generic widget bus, thread-safe
     _gev_send_sig     = pyqtSignal(str)
+    _browser_open_sig = pyqtSignal(str)
+    _browser_close_sig = pyqtSignal()
+    _browser_key_sig = pyqtSignal(str)
+    _browser_click_sig = pyqtSignal(str)
+    _browser_read_page_sig = pyqtSignal()
+    _browser_stop_reading_sig = pyqtSignal()
+    _page_reader_audio_sig = pyqtSignal(bool)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -2560,6 +2586,13 @@ class MainWindow(QMainWindow):
         self._gev_stack.setCurrentWidget(self._gev_placeholder)
         self._hud_cam_stack.addWidget(self._gev_stack)
 
+        self._browser_panel = self._build_browser_panel()
+        self._browser_return_widget: QWidget | None = None
+        self._main_content_stack = QStackedWidget()
+        self._main_content_stack.addWidget(self._hud_cam_stack)
+        self._main_content_stack.addWidget(self._browser_panel)
+        self._main_content_stack.setCurrentWidget(self._hud_cam_stack)
+
         # GEV checks this flag with strict boolean equality during module startup.
         embed_script = QWebEngineScript()
         embed_script.setName("jarvis-gev-inline-bridge")
@@ -2587,7 +2620,7 @@ class MainWindow(QMainWindow):
                 background: {C.PRI_DIM};
             }}
         """)
-        self._center_split.addWidget(self._hud_cam_stack)
+        self._center_split.addWidget(self._main_content_stack)
         self._center_split.addWidget(self._content_panel)
         self._center_split.setStretchFactor(0, 3)
         self._center_split.setStretchFactor(1, 1)
@@ -2622,6 +2655,18 @@ class MainWindow(QMainWindow):
         self._content_sig.connect(self._show_content)
         self._widget_sig.connect(self._on_widget)
         self._gev_send_sig.connect(self._on_gev_send)
+        self._browser_open_sig.connect(self._open_url_in_webview)
+        self._browser_close_sig.connect(self.close_browser)
+        self._browser_key_sig.connect(self._press_key_in_webview)
+        self._browser_click_sig.connect(self._click_link_in_webview)
+        self._browser_read_page_sig.connect(self._read_page_aloud)
+        self._browser_stop_reading_sig.connect(self._stop_page_reading)
+        self._page_read_pending = False
+        self._page_reader = PageSpeechWorker(
+            on_error=self._log_sig.emit,
+            on_started=self._page_reader_started,
+            on_finished=self._page_reader_finished,
+        )
         # Widget system state
         self._active_widgets: dict[str, QWidget] = {}
         self._toast_timers:   dict[str, QTimer]  = {}
@@ -2668,6 +2713,7 @@ class MainWindow(QMainWindow):
 
     # --- Live camera stream in HUD area ------------------------------------
     def _on_cam_stream(self, start: bool) -> None:
+        self._main_content_stack.setCurrentWidget(self._hud_cam_stack)
         if start:
             self._hud_cam_stack.setCurrentIndex(1)
         else:
@@ -2730,6 +2776,7 @@ class MainWindow(QMainWindow):
         self._cam_stop.set()
 
     def load_gev(self) -> None:
+        self._main_content_stack.setCurrentWidget(self._hud_cam_stack)
         self._hud_cam_stack.setCurrentWidget(self._gev_stack)
         if self._gev_load_started:
             return
@@ -2764,6 +2811,272 @@ class MainWindow(QMainWindow):
         if len(self._gev_previous_split_sizes) == 2:
             self._center_split.setSizes(self._gev_previous_split_sizes)
         self._gev_previous_split_sizes = []
+
+    def _build_browser_panel(self) -> QWidget:
+        panel = QWidget()
+        panel.setObjectName("IntegratedBrowser")
+        panel.setStyleSheet(f"""
+            QWidget#IntegratedBrowser {{ background: {C.DARK}; }}
+            QLineEdit {{
+                background: #000d12; color: {C.TEXT};
+                border: 1px solid {C.BORDER}; border-radius: 3px; padding: 5px 8px;
+            }}
+            QPushButton {{
+                background: {C.PANEL}; color: {C.PRI};
+                border: 1px solid {C.BORDER}; border-radius: 3px; padding: 4px 8px;
+            }}
+            QPushButton:hover {{ border-color: {C.PRI}; }}
+        """)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(5)
+        self._browser_back_button = QPushButton("←")
+        self._browser_back_button.setToolTip("Back")
+        self._browser_back_button.clicked.connect(self._browser_go_back)
+        toolbar.addWidget(self._browser_back_button)
+
+        self._browser_forward_button = QPushButton("→")
+        self._browser_forward_button.setToolTip("Forward")
+        self._browser_forward_button.clicked.connect(self._browser_go_forward)
+        toolbar.addWidget(self._browser_forward_button)
+
+        reload_button = QPushButton("⟳")
+        reload_button.setToolTip("Reload")
+        toolbar.addWidget(reload_button)
+
+        self._browser_address = QLineEdit()
+        self._browser_address.setPlaceholderText("https://example.com")
+        self._browser_address.returnPressed.connect(self._navigate_browser_address)
+        toolbar.addWidget(self._browser_address, stretch=1)
+
+        close_button = QPushButton("CLOSE")
+        close_button.clicked.connect(self.close_browser)
+        toolbar.addWidget(close_button)
+        layout.addLayout(toolbar)
+
+        self._browser_status = QLabel("Ready")
+        self._browser_status.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        layout.addWidget(self._browser_status)
+
+        self._browser_view = QWebEngineView()
+        self._browser_page = _SafeBrowserPage(
+            self._browser_view, self._on_browser_navigation_blocked
+        )
+        self._browser_view.setPage(self._browser_page)
+        reload_button.clicked.connect(self._browser_view.reload)
+        self._browser_view.urlChanged.connect(self._sync_browser_address)
+        self._browser_view.loadStarted.connect(
+            lambda: self._browser_status.setText("Loading…")
+        )
+        self._browser_view.loadFinished.connect(self._on_browser_load_finished)
+        self._browser_view.urlChanged.connect(self._update_browser_navigation)
+        layout.addWidget(self._browser_view, stretch=1)
+        self._update_browser_navigation()
+        return panel
+
+    def _navigate_browser_address(self) -> None:
+        try:
+            self._open_url_in_webview(self._browser_address.text())
+        except (TypeError, ValueError) as exc:
+            self._browser_status.setText(f"Invalid URL: {exc}")
+            self._log_sig.emit(f"Browser: URL rifiutato: {exc}")
+
+    def _open_url_in_webview(self, url: str) -> None:
+        normalized_url = normalize_http_url(url)
+        if self._main_content_stack.currentWidget() is not self._browser_panel:
+            self._browser_return_widget = self._main_content_stack.currentWidget()
+        self._main_content_stack.setCurrentWidget(self._browser_panel)
+        self._browser_address.setText(normalized_url)
+        self._browser_view.setUrl(QUrl(normalized_url))
+        self._browser_status.setText("Loading…")
+        self._update_browser_navigation()
+
+    def _sync_browser_address(self, url: QUrl) -> None:
+        if not self._browser_address.hasFocus():
+            self._browser_address.setText(url.toString())
+
+    def _on_browser_load_finished(self, succeeded: bool) -> None:
+        if succeeded:
+            host = self._browser_view.url().host()
+            self._browser_status.setText(f"Loaded {host}")
+            self._log_sig.emit(f"Browser: pagina caricata ({host})")
+        else:
+            self._browser_status.setText("Page load failed")
+            self._log_sig.emit("Browser: caricamento pagina non riuscito")
+        self._update_browser_navigation()
+
+    def _on_browser_navigation_blocked(self) -> None:
+        self._browser_status.setText("Blocked non-HTTP(S) navigation")
+        self._log_sig.emit("Browser: navigazione non HTTP(S) bloccata")
+
+    def _press_key_in_webview(self, key: str) -> None:
+        if self._main_content_stack.currentWidget() is not self._browser_panel:
+            self._log_sig.emit("Browser: impossibile premere un tasto, pagina non attiva")
+            return
+        self._browser_view.setFocus()
+        try:
+            script = build_keyboard_event_script(key)
+            self._browser_page.runJavaScript(
+                script,
+                lambda dispatched: self._browser_key_dispatch_finished(
+                    key, dispatched
+                ),
+            )
+        except (TypeError, ValueError, RuntimeError) as exc:
+            self._log_sig.emit(f"Browser: dispatch tasto non riuscito: {exc}")
+            self._browser_native_key_fallback(key)
+
+    def _browser_key_dispatch_finished(self, key: str, dispatched: object) -> None:
+        if dispatched is True:
+            self._log_sig.emit(f"Browser: KeyboardEvent {key} dispatch completato")
+            return
+        self._log_sig.emit(
+            f"Browser: dispatch JavaScript {key} non riuscito; uso fallback Qt"
+        )
+        self._browser_native_key_fallback(key)
+
+    def _browser_native_key_fallback(self, key: str) -> None:
+        qt_keys = {
+            "ArrowUp": Qt.Key.Key_Up,
+            "ArrowDown": Qt.Key.Key_Down,
+            "ArrowLeft": Qt.Key.Key_Left,
+            "ArrowRight": Qt.Key.Key_Right,
+            " ": Qt.Key.Key_Space,
+            "Enter": Qt.Key.Key_Return,
+            "Escape": Qt.Key.Key_Escape,
+        }
+        qt_key = qt_keys.get(key)
+        if qt_key is None and len(key) == 1 and key.isascii() and key.isalpha():
+            qt_key = Qt.Key(ord(key.upper()))
+        if qt_key is None:
+            self._log_sig.emit(f"Browser: fallback Qt non disponibile per {key}")
+            return
+        self._browser_view.setFocus()
+        QTest.keyClick(self._browser_view, qt_key)
+        self._log_sig.emit(f"Browser: fallback Qt eseguito per {key}")
+
+    def _click_link_in_webview(self, link_text: str) -> None:
+        if self._main_content_stack.currentWidget() is not self._browser_panel:
+            self._log_sig.emit("Browser: impossibile cliccare, pagina non attiva")
+            return
+        try:
+            script = build_click_link_script(link_text)
+            self._browser_page.runJavaScript(
+                script,
+                self._browser_link_click_finished,
+            )
+        except (TypeError, ValueError, RuntimeError) as exc:
+            self._log_sig.emit(f"Browser: click link non riuscito: {exc}")
+
+    def _browser_link_click_finished(self, result: object) -> None:
+        if not isinstance(result, dict):
+            self._log_sig.emit("Browser: la pagina non ha restituito l'esito del click")
+            return
+        if result.get("ok") is True:
+            self._log_sig.emit("Browser: link cliccato")
+        elif result.get("reason") == "ambiguous":
+            self._log_sig.emit("Browser: testo link ambiguo; nessun link cliccato")
+        else:
+            self._log_sig.emit("Browser: link visibile non trovato")
+
+    def _read_page_aloud(self) -> None:
+        if self._main_content_stack.currentWidget() is not self._browser_panel:
+            self._log_sig.emit("Screen reader: aprire prima una pagina nel browser Jarvis")
+            return
+        if self._page_read_pending or self._page_reader.is_running:
+            self._log_sig.emit("Screen reader: una lettura è già in corso")
+            return
+        self._page_read_pending = True
+        self._page_reader_audio_sig.emit(True)
+        try:
+            self._browser_page.runJavaScript(
+                "document.body ? "
+                f"document.body.innerText.slice(0, {MAX_PAGE_CHARS + 1}) : ''",
+                self._on_browser_page_text,
+            )
+        except RuntimeError as exc:
+            self._page_read_pending = False
+            self._page_reader_audio_sig.emit(False)
+            self._log_sig.emit(f"Screen reader: estrazione DOM non riuscita: {exc}")
+
+    def _on_browser_page_text(self, page_text: object) -> None:
+        if not self._page_read_pending:
+            return
+        self._page_read_pending = False
+        if not isinstance(page_text, str):
+            self._page_reader_audio_sig.emit(False)
+            self._browser_status.setText("Page text unavailable")
+            self._log_sig.emit("Screen reader: estrazione del testo pagina non riuscita")
+            return
+        try:
+            plan = self._page_reader.start(page_text)
+        except (TypeError, ValueError, RuntimeError) as exc:
+            self._page_reader_audio_sig.emit(False)
+            self._browser_status.setText("Page reading unavailable")
+            self._log_sig.emit(f"Screen reader: {exc}")
+            return
+        suffix = "; testo limitato" if plan.truncated else ""
+        self._browser_status.setText(f"Reading page ({len(plan.chunks)} chunks)")
+        self._log_sig.emit(
+            f"Screen reader: lettura avviata in {len(plan.chunks)} chunk{suffix}"
+        )
+
+    def _page_reader_started(self) -> None:
+        self._page_reader_audio_sig.emit(True)
+
+    def _page_reader_finished(self) -> None:
+        self._page_reader_audio_sig.emit(False)
+
+    def _stop_page_reading(self) -> None:
+        if self._page_read_pending:
+            self._page_read_pending = False
+            self._page_reader_audio_sig.emit(False)
+            self._log_sig.emit("Screen reader: lettura DOM annullata")
+            return
+        try:
+            stopped = self._page_reader.stop()
+        except Exception as exc:
+            self._log_sig.emit(f"Screen reader: arresto non riuscito: {exc}")
+            return
+        if stopped:
+            self._browser_status.setText("Page reading stop requested")
+            self._log_sig.emit("Screen reader: arresto richiesto")
+        else:
+            self._log_sig.emit("Screen reader: nessuna lettura in corso")
+
+    def _update_browser_navigation(self, _url: QUrl | None = None) -> None:
+        self._browser_back_button.setEnabled(self._browser_view.history().canGoBack())
+        self._browser_forward_button.setEnabled(
+            self._browser_view.history().canGoForward()
+        )
+
+    def _browser_go_back(self) -> None:
+        self._browser_view.back()
+        self._update_browser_navigation()
+
+    def _browser_go_forward(self) -> None:
+        self._browser_view.forward()
+        self._update_browser_navigation()
+
+    def close_browser(self) -> None:
+        previous = self._browser_return_widget
+        if previous is not None and self._main_content_stack.indexOf(previous) >= 0:
+            self._main_content_stack.setCurrentWidget(previous)
+        else:
+            self._main_content_stack.setCurrentWidget(self._hud_cam_stack)
+        self._browser_return_widget = None
+
+    def closeEvent(self, event) -> None:
+        self._page_read_pending = False
+        self._page_reader_audio_sig.emit(False)
+        try:
+            self._page_reader.stop()
+        except Exception as exc:
+            self._log_sig.emit(f"Screen reader: arresto alla chiusura non riuscito: {exc}")
+        super().closeEvent(event)
 
     def _expand_gev_navigation_panels(self) -> None:
         if not self._gev_tab_open or not self._gev_ready_evt.is_set():
@@ -4664,6 +4977,30 @@ class JarvisUI:
 
     def load_gev(self) -> None:
         self.send_to_gev({"action": "open"})
+
+    def open_url_in_webview(self, url: str) -> str:
+        normalized_url = normalize_http_url(url)
+        self._win._browser_open_sig.emit(normalized_url)
+        return normalized_url
+
+    def press_key_in_webview(self, key: str) -> str:
+        normalized_key = normalize_web_key(key)
+        self._win._browser_key_sig.emit(normalized_key)
+        return normalized_key
+
+    def click_link_in_webview(self, link_text: str) -> str:
+        normalized_text = normalize_link_text(link_text)
+        self._win._browser_click_sig.emit(normalized_text)
+        return normalized_text
+
+    def read_page_aloud(self) -> None:
+        self._win._browser_read_page_sig.emit()
+
+    def stop_reading(self) -> None:
+        self._win._browser_stop_reading_sig.emit()
+
+    def close_webview(self) -> None:
+        self._win._browser_close_sig.emit()
 
     def send_to_gev(self, message: dict) -> None:
         if not isinstance(message, dict):
